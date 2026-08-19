@@ -147,7 +147,7 @@ Al termine FTK mostra **hash MD5/SHA1** originale vs copia → verifica integrit
 **Setup fisico corretto (sempre):**
 
 ```
-Disco sospetto → \\\[HARDWARE WRITE BLOCKER] → Workstation forense (FTK) → .img / disco vuoto
+Disco sospetto → [HARDWARE WRITE BLOCKER] → Workstation forense (FTK) → .img / disco vuoto
 ```
 
 ### dd (Linux)
@@ -239,7 +239,7 @@ Esempio JPEG: header `\xff\xd8\xff\xe0` → footer `\xff\xd9`
 ### Scalpel
 
 ```bash
-scalpel -o <output\\\_dir> <disk\\\_image.img>
+scalpel -o <output_dir> <disk_image.img>
 ```
 
 * `-o` → cartella output. **Deve essere vuota o non esistente** (Scalpel la crea)
@@ -255,7 +255,7 @@ sudo nano /etc/scalpel/scalpel.conf   # 1. apri il config
 rm -rf ScalpelOutput                  # 5. se la cartella output esiste già
 scalpel -o ScalpelOutput carve1.img   # 6. lancia
 ls -R ScalpelOutput                   # 7. guarda i risultati
-md5sum ScalpelOutput/jpg-0-0/\\\*.jpg    # 8. hash del file recuperato
+md5sum ScalpelOutput/jpg-0-0/*.jpg    # 8. hash del file recuperato
 ```
 
 Output: sottocartelle per tipo (`jpg-0-0/`, `png-0-0/`...) + **`audit.txt`** (log dell'attività).
@@ -265,7 +265,7 @@ Profili **custom**: si creano nel `.conf` definendo estensione + header + footer
 ### chown (permessi — spesso necessario nei lab)
 
 ```bash
-chown <nuovo\\\_owner> <file>           # es. chown ubuntu q3.conf
+chown <nuovo_owner> <file>           # es. chown ubuntu q3.conf
 chown <owner>:<gruppo> <file>
 ls -l <file>                         # verifica
 sudo chown ubuntu q3.conf            # se non hai permessi
@@ -304,7 +304,7 @@ Password: Invio 2 volte = nessuna password. Se protetto → **StegCracker** per 
 **Metodo 3 — metadati:**
 
 ```bash
-exiftool -Comment="Super Sneaky!" Dog.jpg    # scrivi (crea Dog.jpg\\\_original come backup)
+exiftool -Comment="Super Sneaky!" Dog.jpg    # scrivi (crea Dog.jpg_original come backup)
 exiftool Dog.jpg                             # leggi
 ```
 
@@ -319,7 +319,7 @@ exiftool Dog.jpg                             # leggi
 |Artefatto|Percorso|
 |-|-|
 |**LNK / shortcut**|`C:\Users\<user>\AppData\Roaming\Microsoft\Windows\Recent\`|
-|**Prefetch**|`C:\Windows\Prefetch\\\\*.pf`|
+|**Prefetch**|`C:\Windows\Prefetch\*.pf`|
 |**Jump List (automatic)**|`C:\Users\<user>\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations`|
 |**Jump List (custom)**|`C:\Users\<user>\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations`|
 |**Event Logs**|`C:\Windows\System32\winevt\Logs\` (Security, System, Application...)|
@@ -419,7 +419,7 @@ wmic useraccount get name,SID                   :: mappa SID → username
 PowerShell alternativo se `wmic` è deprecato:
 
 ```powershell
-Get-CimInstance Win32\\\_UserAccount | Select-Object Name, SID
+Get-CimInstance Win32_UserAccount | Select-Object Name, SID
 ```
 
 **RBCmd:**
@@ -514,7 +514,7 @@ cat /var/lib/dpkg/status | grep Package > packages.txt
 ### Apache access.log — parsing
 
 ```
-52.50.100.106 - SBTUser \\\[27/Jul/2020:15:30:00 -0600] "GET /logo.png HTTP/1.1" 200 379
+52.50.100.106 - SBTUser [27/Jul/2020:15:30:00 -0600] "GET /logo.png HTTP/1.1" 200 379
      IP        -  userID          timestamp          metodo+risorsa        code size
 ```
 
@@ -525,11 +525,11 @@ Status code: `200` OK · `404` not found · `403` forbidden · `500` server erro
 
 ```bash
 ls -a                    # SEMPRE -a → mostra i file nascosti (che iniziano con ".")
-cat \\\~/.bash\\\_history      # comandi eseguiti dall'utente
+cat ~/.bash_history      # comandi eseguiti dall'utente
 history                  # history della sessione corrente
 ```
 
-⚠️ Due limiti di `.bash\\\_history`:
+⚠️ Due limiti di `.bash_history`:
 
 * `history -c` cancella la history **di sessione**, ma il file su disco può conservare i comandi precedenti
 * I comandi vengono scritti nel file **solo alla chiusura del terminale** → una sessione aperta può non comparire
@@ -684,7 +684,7 @@ Ingest Modules → target "All Files, Directories, and Unallocated Space"
 |Errore / sintomo|Causa|Fix|
 |-|-|-|
 |Scalpel: *"configuration file didn't specify any file types to carve"*|Tutte le righe del `.conf` sono commentate|`sudo nano /etc/scalpel/scalpel.conf` → rimuovi `#` dal tipo file|
-|Scalpel: errore su cartella output|La cartella esiste e non è vuota|`rm -rf <output\\\_dir>` oppure usa un nome nuovo|
+|Scalpel: errore su cartella output|La cartella esiste e non è vuota|`rm -rf <output_dir>` oppure usa un nome nuovo|
 |PECmd: *"Option '-d' parse error"*|Backslash prima delle virgolette: `"...\Prefetch\"`|Togli il `\` finale: `"...\Prefetch"`|
 |RBCmd: *"Administrator privileges not found! Found 0 files"*|CMD non elevato|Riapri CMD/PowerShell **come Amministratore**|
 |*"The filename, directory name, or volume label syntax is incorrect"*|`.\` combinato con un path assoluto|Path assoluto **senza** `.\`, oppure `.\exe` solo se sei nella cartella dell'exe|
@@ -702,7 +702,7 @@ Ingest Modules → target "All Files, Directories, and Unallocated Space"
 |Aspetto|Windows|Linux|
 |-|-|-|
 |**Logging**|Event Logs (4624/4625/4634/4672/4688/7045/1102)|`auth.log`, `secure`, `btmp`, `faillog`, syslog/journal|
-|**Artefatti utente**|Registry, Prefetch, Jump List, LNK, Recycle Bin|`.bash\\\_history`, `/etc/passwd`, file nascosti (`.`)|
+|**Artefatti utente**|Registry, Prefetch, Jump List, LNK, Recycle Bin|`.bash_history`, `/etc/passwd`, file nascosti (`.`)|
 |**Browser**|BHC/BHV, path standard|Estrazione manuale, path variabili|
 |**Pacchetti**|Programs and Features, MSI log, Amcache|`/var/lib/dpkg/status`, `/var/log/dpkg.log`|
 |**Memoria su disco**|`hiberfil.sys`, `pagefile.sys`|swap partition/file, **LiME** per acquisizione|
