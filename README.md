@@ -724,7 +724,7 @@ URL     → WannaBrowser (se abbreviato) → URLScan → estrai dominio → ripa
 | **1** | Process creation (+ command line + parent) |
 | **3** | Network connection |
 | **7** | Image/DLL loaded ← contiene gli **HASH** |
-| 8 | CreateRemoteThread (injection) |
+| 8 | CreateRemoteThread (injection + persistence) |
 | 10 | ProcessAccess (credential dumping su lsass) |
 | **11** | File created |
 | **13** | Registry value set |
