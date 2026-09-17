@@ -11,14 +11,59 @@
 |---|---|---|
 | `.pcap` / `.pcapng` / `.cap` | §2 | Wireshark |
 | `.mem` / `.dmp` / `.raw` (memoria) | §3 | Volatility |
-| `.E01` / `.img` / `.dd` (disco) | §4 | Autopsy · Scalpel · FTK Imagerr |
+| `.E01` / `.img` / `.dd` (disco) | §4 | Autopsy · Scalpel · FTK Imager |
+| `.pf` (Prefetch) | §5 | PECmd |
+| `$I*` / `$R*` (Recycle Bin) | §5 | RBCmd |
+| `.lnk` (shortcut) | §5 | Windows File Analyzer |
+| Jump List (`AutomaticDestinations` / `CustomDestinations`) | §5 | JumpList Explorer |
+| `SYSTEM` / `SAM` / `SOFTWARE` / `NTUSER.DAT` / `Amcache.hve` (registry hive) | §3, §5 | Volatility `hivelist` · Registry Explorer |
 | `.evtx` (event log) | §5 | DeepBlueCLI · Event Viewer |
 | Sistema Windows **live** | §6 | CMD / PowerShell |
 | Sistema Linux **live** o immagine | §7 | comandi Linux |
 | Log dentro Splunk | §1 | SPL |
 | `.eml` / email | §8 | CyberChef · tool online |
 | Un file qualsiasi (hash/metadati) | §9 | Get-FileHash · exiftool |
+| Sospetta steganografia (immagine "pesante"/anomala) | §9 | steghide · StegCracker |
+| CSV prodotto da un altro tool (PECmd/RBCmd) | §5 | CSVQuickViewer |
 | Un IOC da arricchire | §10 | MISP · OSINT |
+
+---
+
+## 🛠️ TOOL REFERENCE — "A cosa serve ognuno?"
+
+| Tool | A cosa serve | Quando lo usi |
+|---|---|---|
+| **Splunk (SPL)** | Interrogare log centralizzati (Sysmon, Windows Security, firewall, IDS, web) | Hai accesso a un indice con eventi già ingeriti |
+| **Wireshark** | Ispezionare traffico di rete pacchetto per pacchetto | Hai un `.pcap`/`.pcapng` da un dump di rete |
+| **Volatility 2/3** | Analisi forense della RAM (processi, connessioni, injection) | Hai un dump di memoria `.mem`/`.raw`/`.dmp` |
+| **Autopsy** | Analisi forense completa di un'immagine disco (GUI) | Hai un `.E01`/`.img` e vuoi esplorare filesystem, email, cronologia, ecc. |
+| **Scalpel** | File carving: recupera file cancellati/frammentati da un'immagine raw | Devi ricostruire file da un `.img`/`.dd` senza filesystem intatto |
+| **FTK Imager** | Acquisizione forense (RAM/disco) e visualizzazione rapida di immagini | Devi creare un `.mem`/`.E01` o aprire/ispezionare un'immagine già fatta |
+| **PECmd** | Parsing dei file Prefetch (`.pf`): quante volte un eseguibile è girato, quando, da dove | Devi provare l'esecuzione di un programma su un host Windows |
+| **RBCmd** | Parsing del Recycle Bin (`$I`/`$R`): nome originale, path, size, data cancellazione | Devi recuperare metadati di file cancellati |
+| **Windows File Analyzer** | Parsing dei file `.lnk` (shortcut) | Devi sapere quale file/percorso apriva uno shortcut e quando |
+| **JumpList Explorer** | Parsing delle Jump List (file recenti per applicazione) | Devi ricostruire quali file sono stati aperti con quale programma |
+| **CSVQuickViewer** | Visualizzare comodamente output CSV di altri tool (PECmd, RBCmd, ecc.) | Hai generato un CSV e vuoi filtrare/ordinare senza Excel |
+| **DeepBlueCLI** | Triage automatico di `.evtx`: rileva pattern sospetti (spraying, Mimikatz, PowerShell offuscato) | Vuoi una prima scrematura veloce di un event log, senza cercare a mano |
+| **Event Viewer** | Consultazione manuale/GUI dei log di Windows | Il sistema non è nel SIEM o devi creare una Custom View su Event ID specifici |
+| **CMD / PowerShell** | Triage live di un sistema Windows (processi, rete, utenti, servizi) | Hai accesso interattivo a una macchina Windows da analizzare |
+| **Sysmon** | Logging avanzato di processi/rete/registro su Windows (sorgente per Splunk/Event Viewer) | Devi installare/configurare la sorgente di log prima di poterla interrogare |
+| **Comandi Linux (bash)** | Triage live o su immagine di un sistema Linux (utenti, auth, cron, rete) | Hai accesso a shell Linux o file estratti da un'immagine Linux |
+| **CyberChef** | "Coltellino svizzero": decodifica (Base64 ecc.), defanging IOC, trasformazioni dati | Devi decodificare un body email o defangare IOC per un report |
+| **WannaBrowser** | Risolve una catena di redirect di un URL abbreviato senza visitarlo | Hai un link sospetto abbreviato (bit.ly ecc.) in una phishing mail |
+| **URL2PNG / URLScan.io** | Screenshot di una pagina web senza visitarla direttamente | Devi vedere cosa mostra un URL sospetto senza rischiare il click |
+| **VirusTotal** | Reputazione di file (hash), URL, domini, IP | Hai un IOC (hash/URL/IP/dominio) e vuoi sapere se è già noto come malevolo |
+| **AbuseIPDB** | Reputazione/segnalazioni storiche di un IP | Vuoi sapere se un IP è già stato segnalato per abuso |
+| **Cisco Talos** | Reputazione file e IP/domini (alternativa/conferma a VT) | Vuoi una seconda fonte di reputazione |
+| **Hybrid Analysis / Any.run / Joe Sandbox** | Sandbox: esecuzione controllata di un file/URL sospetto | Devi vedere il comportamento reale (processi, rete, IOC generati) di un allegato |
+| **WHOIS / MxToolbox** | Info di registrazione dominio (età, registrar, contatti) | Devi valutare se un dominio è appena registrato (sospetto) |
+| **Get-FileHash / sha256sum / md5sum** | Calcolo hash di file o stringhe | Devi identificare/confrontare un file per IOC o integrità |
+| **exiftool** | Lettura/scrittura metadati di file (immagini, documenti) | Devi estrarre autore, GPS, software, data creazione di un file |
+| **steghide / StegCracker** | Nascondere/estrarre/rilevare dati steganografati in immagini | Sospetti dati nascosti in un'immagine (file "pesante" o indicato dal task) |
+| **KAPE** | Triage rapido: raccoglie in blocco artefatti forensi mirati (browser, prefetch, ecc.) | Devi acquisire velocemente molti artefatti da un host live senza immagine completa |
+| **Procdump** | Dump della memoria di un singolo processo live | Devi analizzare un processo sospetto senza dumpare tutta la RAM |
+| **dd** | Acquisizione bit-a-bit di un disco (Linux) | Devi creare un'immagine forense di un disco su sistema Linux |
+| **MISP** | Piattaforma di Threat Intelligence: gestione e condivisione IOC | Devi inserire/arricchire/pivotare su IOC in modo strutturato |
 
 ---
 
