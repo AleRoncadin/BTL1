@@ -614,6 +614,9 @@ FTK IMAGER
                 → Add → formato .E01 (o Raw/dd) → Image Fragment Size = 0
                 → Finish → Start  (al termine confronta gli hash)
 
+Se ho un file .img: FTK Imager → File → Add Evidence Item → Image File
+Identificare il File System di un'immagine: FTK Imager → File → Add Evidence Item → Image File
+
 KAPE (triage rapido)
   gkape.exe → toggle "Use Target options"
   → Target source (C:\ o immagine) → Target destination (cartella nuova)
@@ -625,8 +628,8 @@ PROCDUMP (dump singolo processo live)
 
 dd (Linux)
   sudo dd if=/dev/sdb of=/mnt/evidence/disk.dd bs=4M status=progress
-  sha256sum /mnt/evidence/disk.dd > disk.dd.sha256
-```
+  sha256sum /mnt/evidence/disk.dd > disk.dd.sha256`
+
 ⚠️ **Ordine sempre:** volatile prima (RAM via KAPE/FTK) → poi disco (write blocker + FTK Imager)
 
 ---
