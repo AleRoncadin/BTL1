@@ -11,7 +11,7 @@
 |---|---|---|
 | `.pcap` / `.pcapng` / `.cap` | §2 | Wireshark |
 | `.mem` / `.dmp` / `.raw` (memoria) | §3 | Volatility |
-| `.E01` / `.img` / `.dd` (disco) | §4 | Autopsy · Scalpel |
+| `.E01` / `.img` / `.dd` (disco) | §4 | Autopsy · Scalpel · FTK Imagerr |
 | `.evtx` (event log) | §5 | DeepBlueCLI · Event Viewer |
 | Sistema Windows **live** | §6 | CMD / PowerShell |
 | Sistema Linux **live** o immagine | §7 | comandi Linux |
@@ -329,6 +329,11 @@ md5sum ScalpelOutput/jpg-0-0/00000000.jpg
 ⚠️ Errore *"didn't specify any file types to carve"* = non hai decommentato nulla nel `.conf`
 ⚠️ Permessi negati → `sudo chown <user> <file>` oppure prefissa `sudo`
 
+### FTK Imager
+```
+Se ho un file .img: FTK Imager → File → Add Evidence Item → Image File
+Identificare il File System di un'immagine: FTK Imager → File → Add Evidence Item → Image File
+```
 ---
 
 ## 5. WINDOWS — ARTEFATTI E EVENT LOG
