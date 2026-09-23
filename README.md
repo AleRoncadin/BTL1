@@ -26,6 +26,7 @@
 | Sospetta steganografia (immagine "pesante"/anomala) | §9 | steghide · StegCracker |
 | CSV prodotto da un altro tool (PECmd/RBCmd) | §5 | CSVQuickViewer |
 | Un IOC da arricchire | §10 | MISP · OSINT |
+| Un **incidente reale** da gestire (phishing, malware, ransomware...) | §13 | Runbook |
 
 ---
 
@@ -64,6 +65,14 @@
 | **Procdump** | Dump della memoria di un singolo processo live | Devi analizzare un processo sospetto senza dumpare tutta la RAM |
 | **dd** | Acquisizione bit-a-bit di un disco (Linux) | Devi creare un'immagine forense di un disco su sistema Linux |
 | **MISP** | Piattaforma di Threat Intelligence: gestione e condivisione IOC | Devi inserire/arricchire/pivotare su IOC in modo strutturato |
+| **Autoruns (autorunsc)** 🏢 | Elenca tutti i punti di persistenza (Run keys, servizi, task, driver) con hash e firma | Triage live di un host sospetto |
+| **WinPmem / LiME** 🏢 | Dump RAM da riga di comando (Windows / Linux) | Alternativa a FTK Imager, o su Linux |
+| **EZ Tools (AmcacheParser, EvtxECmd, MFTECmd)** | Parsing di Amcache, event log e $MFT in CSV | Analisi artefatti in blocco dopo KAPE |
+| **Timeline Explorer** | Visualizzare/filtrare i CSV degli EZ Tools | Costruire la timeline dell'incidente |
+| **emldump.py** | Elenca ed estrae le parti MIME di un `.eml` (allegati) | Estrarre l'allegato da una phishing mail |
+| **oletools (oleid, olevba)** 🏢 | Analisi di documenti Office: macro VBA, IOC embedded | Allegato `.doc/.docm/.xls` sospetto |
+| **pdfid.py** 🏢 | Rileva elementi pericolosi in un PDF (`/JavaScript`, `/OpenAction`) | Allegato PDF sospetto |
+| **ID Ransomware / No More Ransom** 🏢 | Identifica la famiglia ransomware / trova decryptor gratuiti | Incidente ransomware |
 
 ---
 
@@ -678,7 +687,8 @@ PROCDUMP (dump singolo processo live)
 
 dd (Linux)
   sudo dd if=/dev/sdb of=/mnt/evidence/disk.dd bs=4M status=progress
-  sha256sum /mnt/evidence/disk.dd > disk.dd.sha256`
+  sha256sum /mnt/evidence/disk.dd > disk.dd.sha256
+```
 
 ⚠️ **Ordine sempre:** volatile prima (RAM via KAPE/FTK) → poi disco (write blocker + FTK Imager)
 
@@ -880,6 +890,569 @@ PRI = (Facility Code × 8) + Severity Value
 | Linux: permission denied | `sudo chown <user> <file>` o prefissa `sudo` |
 | Windows: cartelle non visibili | `dir /a` |
 | MISP: job pending, nessun evento | Avvia i worker (`start.sh`) |
+
+---
+
+## 13. RUNBOOK — INCIDENT RESPONSE (strategia + procedura tecnica)
+
+> Ogni scenario ha due livelli:
+> **① Quadro d'insieme**: cosa devi ottenere in ogni fase NIST, con i rimandi agli step · **② Procedura tecnica**: gli step numerati con comandi e tool.
+> 🧪 = fattibile nel lab BTL1 · 🏢 = vita reale (M365 / AD / EDR)
+> Evidenze sempre su **disco esterno** (`E:\IR\<caso>` / `/mnt/usb/<caso>`), mai sull'host compromesso. Ogni file acquisito → **hash subito**.
+
+### 🗺️ Indice scenari
+| Scenario | Trigger tipico | Può portare a |
+|---|---|---|
+| [A. Phishing](#-a-phishing) | Mail segnalata dall'utente · alert del gateway | B (allegato eseguito) · C (credenziali inserite) |
+| [B. PC Windows compromesso](#-b-pc-windows-compromesso) | Alert EDR/AV · processo o traffico anomalo | F (movimento laterale) · E (exfil) |
+| [B-bis. Server Linux compromesso](#-b-bis-server-linux-compromesso) | Processo/connessione anomala · alert su server | E · G |
+| [C. Account compromesso](#-c-account-compromesso--brute-force--password-spray) | Picco di 4625 · login anomalo · impossible travel | F · A (phishing interno) |
+| [D. Ransomware](#-d-ransomware) | File rinominati · ransom note · shadow copy cancellate | E (double extortion) |
+| [E. Data exfiltration](#-e-data-exfiltration) | Volumi anomali in uscita · DNS strano · DLP | B |
+| [F. Lateral movement / AD](#%EF%B8%8F-f-lateral-movement--attivit%C3%A0-sospetta-in-ad) | Logon tra workstation · PsExec · accesso a LSASS | D |
+| [G. Web server / web app](#-g-attacco-a-web-server--web-application) | Picco di 404 · pattern SQLi · alert WAF | B / B-bis (webshell) |
+
+### ⚖️ Principi validi per TUTTI gli scenari
+| Regola | Perché |
+|---|---|
+| **Documenta tutto con timestamp** (chi, cosa, quando, da dove) | La timeline è la base del report e di eventuali azioni legali |
+| **Non spegnere** un host compromesso → **isolalo dalla rete** | Spegnendo perdi la RAM (processi, connessioni, chiavi di cifratura) |
+| **Ordine di volatilità**: RAM → processi/rete live → disco → log | Il volatile sparisce per primo |
+| **Niente scansioni AV prima del dump** | Modificano timestamp e possono cancellare il malware (= prova) |
+| **Hash di ogni evidenza acquisita** + chain of custody | Integrità e ammissibilità della prova |
+| **Non allertare l'attaccante** (no ping/visite ai suoi IP/domini dalla rete aziendale) | Rischi che cambi infrastruttura o acceleri l'attacco |
+| **Scoping prima del contenimento definitivo**: cerca lo stesso IOC su TUTTA la fleet (SIEM/EDR) | Contenere un host solo mentre altri 5 sono infetti = reinfezione |
+| **Escalation secondo procedura** (responsabile/CISO) appena la severity è ≥ Alta | Decisioni di business (isolare server critici, notifiche legali) non spettano all'analista |
+| **Obblighi di notifica**: GDPR → Garante entro **72h** (data breach) · NIS2 → early warning **24h**, notifica **72h**, report finale **1 mese** | Da valutare con legal/CISO, non in autonomia |
+
+### 🔁 Fasi NIST SP 800-61 (scheletro di ogni scenario)
+| # | Fase | Obiettivo |
+|---|---|---|
+| 1 | Preparation | Tool, accessi, contatti, playbook pronti **prima** (chiavetta IR con FTK Imager, WinPmem, KAPE, EZ Tools, Autoruns) |
+| 2 | Detection & Analysis | Confermare che è un incidente, capirne portata e severity |
+| 3 | Containment | Fermare la propagazione (short-term: isolamento → long-term: blocchi, reset) |
+| 4 | Eradication | Rimuovere la causa (malware, persistenza, account, vulnerabilità) |
+| 5 | Recovery | Ripristinare in sicurezza e monitorare |
+| 6 | Lessons Learned | Report, root cause, miglioramenti (regole SIEM, awareness, patch) |
+
+---
+
+### 🎣 A. PHISHING
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Analisi** | Header (`Received` dal basso, `Reply-To`≠`From`, SPF/DKIM/DMARC) · URL (da `href`) · allegato (SHA256, reputazione, sandbox) | 1 · 2 · 3 · 4 |
+| **Scoping** | Quanti l'hanno ricevuta · **chi ha cliccato** · **chi ha inserito credenziali** · chi ha aperto l'allegato | 5 |
+| **Containment** | Purge da tutte le mailbox · blocco mittente/URL/hash · reset + revoca sessioni per chi ha inserito credenziali | 6 · 7 |
+| **Eradication** | Inbox rules / inoltri dell'attaccante · MFA e app OAuth aggiunte · allegato eseguito → scenario **B** | 7 |
+| **Recovery** | Monitoraggio login degli account coinvolti (impossible travel, nuovi device) | 7 |
+| **Lessons Learned** | IOC defangati in report e MISP · awareness utenti · tuning gateway | 8 |
+
+#### ② Procedura tecnica
+
+**1. Preserva l'originale** · *Analysis* 🧪
+```powershell
+Get-FileHash -Algorithm SHA256 .\mail.eml          # hash dell'evidenza
+```
+🏢 Outlook: *Salva come* `.eml`/`.msg` (non inoltrare: perdi gli header originali)
+
+**2. Estrai gli header chiave** · *Analysis* 🧪
+```bash
+grep -iE "^(from|to|cc|subject|date|reply-to|return-path|message-id|x-originating-ip|x-sender-ip|authentication-results|received):" mail.eml
+```
+| Controllo | Come |
+|---|---|
+| Origine reale | `Received` **più in basso** → IP → `dig -x <IP>` + AbuseIPDB |
+| Spoofing | `Authentication-Results`: `spf=fail` / `dkim=fail` / `dmarc=fail` |
+| Reply-To ≠ From | 🚩 BEC / raccolta risposte |
+| Dominio mittente | WHOIS → età < 30 gg = 🚩 |
+
+**3. Estrai gli URL** · *Analysis* 🧪
+```bash
+grep -oiE 'https?://[^"<> ]+' mail.eml | sort -u
+```
+Body in base64 → **CyberChef**: `From Base64` → `Extract URLs`
+URL abbreviato → **WannaBrowser** · poi **URLScan.io** (screenshot) + **VirusTotal**
+
+**4. Estrai e analizza l'allegato** · *Analysis* 🧪
+```bash
+emldump.py mail.eml                       # elenca le parti MIME
+emldump.py mail.eml -s <n> -d > allegato  # dump della parte n
+# alternativa: CyberChef → From Base64 → icona "Save output to file"
+sha256sum allegato                        # → cerca l'HASH su VirusTotal/Talos (non caricare file aziendali!)
+```
+| Tipo allegato | Tool |
+|---|---|
+| Office (`.doc/.docm/.xls`) | `oleid file` · `olevba file` → macro, AutoOpen, URL, PowerShell |
+| PDF | `pdfid.py file.pdf` → cerca `/JavaScript`, `/OpenAction`, `/Launch` |
+| `.exe/.js/.hta/.iso/.lnk` | Hash → VT · sandbox **Any.run / Hybrid Analysis** → annota IP/domini contattati |
+
+**5. Chi l'ha ricevuta / cliccata / eseguita** · *Scoping* 🧪
+```splunk
+### chi ha contattato il dominio (DNS)
+index=* sourcetype=stream:dns query="*<dominio>*" earliest=0 | stats count by src_ip
+### stessa cosa via Sysmon (DNS query)
+index=* sourcetype=<SYSMON> EventCode=22 QueryName="*<dominio>*" earliest=0 | stats count by Computer, Image
+### chi ha aperto l'allegato (processo figlio di Outlook/Office)
+index=* sourcetype=<SYSMON> EventCode=1 earliest=0
+(ParentImage="*\\outlook.exe" OR ParentImage="*\\winword.exe" OR ParentImage="*\\excel.exe")
+| table _time, Computer, User, ParentImage, Image, CommandLine
+### file droppato dalla cache allegati di Outlook
+index=* sourcetype=<SYSMON> EventCode=11 TargetFilename="*\\Content.Outlook\\*" earliest=0
+| table _time, Computer, TargetFilename
+```
+
+**6. Purge e blocchi** · *Containment* 🏢 (Exchange Online / Security & Compliance PowerShell)
+```powershell
+# purge da tutte le mailbox
+New-ComplianceSearch -Name "phish-<id>" -ExchangeLocation All -ContentMatchQuery 'from:"<mittente>" AND subject:"<oggetto>"'
+Start-ComplianceSearch -Identity "phish-<id>"
+New-ComplianceSearchAction -SearchName "phish-<id>" -Purge -PurgeType SoftDelete
+
+# blocco mittente / URL / hash
+New-TenantAllowBlockListItems -ListType Sender   -Block -Entries "<mittente>" -NoExpiration
+New-TenantAllowBlockListItems -ListType Url      -Block -Entries "<dominio>"  -NoExpiration
+New-TenantAllowBlockListItems -ListType FileHash -Block -Entries "<sha256>"   -NoExpiration
+```
+Livello di blocco (dominio vs URL vs directory) → albero decisionale in §8
+
+**7. Utente che ha inserito le credenziali** · *Containment → Eradication → Recovery* 🏢
+```powershell
+# reset password (portale/AD) + chiudi tutte le sessioni attive
+Revoke-MgUserSignInSession -UserId <upn>
+# regole inbox create dall'attaccante (inoltro/cancellazione)
+Get-InboxRule -Mailbox <upn> | fl Name,Enabled,ForwardTo,RedirectTo,DeleteMessage,MoveToFolder
+Get-Mailbox <upn> | fl ForwardingSmtpAddress,DeliverToMailboxAndForward
+```
+Poi: metodi MFA aggiunti · app OAuth autorizzate · sign-in log (IP/paese anomali) → monitoraggio nei giorni successivi
+Allegato eseguito su un PC → vai a **B**
+
+**8. Chiusura** · *Lessons Learned* 🧪
+IOC → CyberChef `Defang URL` / `Defang IP Addresses` → MISP **Freetext Import** → report (template in fondo)
+
+---
+
+### 💻 B. PC WINDOWS COMPROMESSO
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Containment (short-term)** ⚡ | **Isolamento di rete** subito, senza spegnere | 1 |
+| **Raccolta evidenze** | **RAM per prima** → dati volatili → artefatti (KAPE) → immagine disco se serve | 2 · 3 · 4 · 5 |
+| **Analisi** | Processo, parent, command line, utente · parent-child anomali (`winword→powershell`, `svchost→cmd`) · connessioni · hash → VT · persistenza | 6 · 7 |
+| **Scoping** | Stesso hash / IP C2 / dominio / nome file su **tutta** la fleet · vettore d'ingresso (email → A, USB, download, exploit) | 8 |
+| **Containment (long-term)** | Blocco IP/domini C2 (firewall/proxy/DNS) + hash (EDR) · disabilita l'account se usato dal malware | 9 |
+| **Eradication** | Persistenza rimossa (Run keys, task, servizi, WMI, account) · preferisci **reimage** alla pulizia | 9 |
+| **Recovery** | Reset credenziali usate sull'host (possibile dump LSASS) · rientro in rete sotto monitoraggio | 10 |
+| **Lessons Learned** | Root cause (vettore iniziale) · nuova regola SIEM per il pattern osservato | Report |
+
+#### ② Procedura tecnica
+
+**1. Isola (NON spegnere)** · *Containment*
+🏢 EDR → *Isolate host* · senza EDR: stacca il cavo / disabilita la porta sullo switch
+Annota: ora, utente loggato, cosa si vede a schermo (foto)
+
+**2. Dump della RAM** · *Evidenze* (da USB, output su disco esterno)
+```
+FTK Imager → File → Capture Memory → Destination: E:\IR\<caso> → ✔ Include pagefile → Capture
+```
+```cmd
+winpmem_mini_x64.exe E:\IR\<caso>\mem.raw       :: alternativa da riga di comando
+```
+```powershell
+Get-FileHash -Algorithm SHA256 E:\IR\<caso>\*.mem
+```
+Solo un processo sospetto: `procdump.exe -accepteula -ma <PID> E:\IR\<caso>\`
+
+**3. Dati volatili live** · *Evidenze* (CMD admin, output su esterno)
+```cmd
+set O=E:\IR\<caso>\live
+echo %date% %time% > %O%\00_ora.txt
+netstat -anob                                    > %O%\netstat.txt
+tasklist /v                                      > %O%\tasklist.txt
+wmic process get processid,parentprocessid,name,executablepath,commandline /format:csv > %O%\processi.csv
+ipconfig /displaydns                             > %O%\dnscache.txt
+arp -a                                           > %O%\arp.txt
+quser                                            > %O%\sessioni.txt
+net user                                         > %O%\utenti.txt
+net localgroup administrators                    > %O%\admin.txt
+schtasks /query /fo LIST /v                      > %O%\tasks.txt
+sc query type= service state= all                > %O%\servizi.txt
+reg query HKLM\Software\Microsoft\Windows\CurrentVersion\Run > %O%\run_hklm.txt
+reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run > %O%\run_hkcu.txt
+autorunsc64.exe -accepteula -a * -c -h -s        > %O%\autoruns.csv
+```
+```powershell
+# persistenza WMI (Sysmon 19-20-21)
+Get-CimInstance -Namespace root\subscription -ClassName __EventFilter
+Get-CimInstance -Namespace root\subscription -ClassName CommandLineEventConsumer
+```
+
+**4. Triage artefatti con KAPE** · *Evidenze*
+```cmd
+kape.exe --tsource C: --tdest E:\IR\<caso>\kape_t --target KapeTriage --mdest E:\IR\<caso>\kape_m --module !EZParser
+```
+GUI: `gkape.exe` → Use Target options → `KapeTriage` → (Module options → `!EZParser`) → Execute
+
+**5. Immagine disco** · *Evidenze* (se serve analisi completa)
+```
+FTK Imager → File → Create Disk Image → Physical Drive → formato E01 → Fragment Size 0 → ✔ Verify → Start
+```
+Disco rimosso → sempre dietro **write blocker**
+
+**6. Analisi RAM** · *Analysis* 🧪
+```bash
+vol -f mem.raw windows.info
+vol -f mem.raw windows.pstree          # parent-child anomali (winword→powershell, svchost→cmd)
+vol -f mem.raw windows.psscan          # confronta con pslist → processi nascosti
+vol -f mem.raw windows.cmdline
+vol -f mem.raw windows.netscan         # Foreign Address pubblici
+vol -f mem.raw windows.malfind         # injection
+vol -f mem.raw windows.pslist --pid <PID> --dump   # estrai l'eseguibile → sha256sum → VT
+```
+(Vol2: `imageinfo` → `--profile=` → `pstree`, `psscan`, `cmdline`, `netscan`, `malfind`, `procdump` — §3)
+
+**7. Analisi artefatti disco** · *Analysis* 🧪
+```powershell
+PECmd.exe         -d "C:\Windows\Prefetch"                        --csv E:\IR\<caso>\out   # esecuzioni
+AmcacheParser.exe -f "C:\Windows\AppCompat\Programs\Amcache.hve"  --csv E:\IR\<caso>\out   # esecuzioni + SHA1
+EvtxECmd.exe      -d "C:\Windows\System32\winevt\Logs"            --csv E:\IR\<caso>\out   # tutti gli evtx
+MFTECmd.exe       -f "E:\IR\<caso>\kape_t\C\$MFT"                 --csv E:\IR\<caso>\out   # timeline filesystem
+RBCmd.exe         -d "C:\$Recycle.Bin"                            --csv E:\IR\<caso>\out   # file cancellati
+.\DeepBlue.ps1    E:\IR\<caso>\kape_t\C\Windows\System32\winevt\Logs\Security.evtx
+```
+CSV → **Timeline Explorer** / CSVQuickViewer · Immagine completa → **Autopsy** (§4)
+Persistenza da cercare negli eventi: Run keys (Sysmon 13) · task (4698) · servizi (7045) · WMI (Sysmon 19-21) · account (4720)
+
+**8. Scoping sulla fleet** · *Scoping* 🧪
+```splunk
+index=* ("<hash>" OR "<IP_C2>" OR "<dominio_C2>" OR "<nome_file>") earliest=0
+| stats count, values(sourcetype) by host
+```
+
+**9. Blocchi e bonifica** · *Containment long-term → Eradication* 🏢
+Blocco IP/domini C2 (firewall/proxy/DNS) + hash (EDR) → rimozione persistenza trovata negli step 3/7 → **reimage** (non "pulire")
+
+**10. Rientro** · *Recovery* 🏢
+Reset password di tutti gli account loggati sull'host → rientro in rete sotto monitoraggio (stessi IOC in alert sul SIEM)
+
+---
+
+### 🐧 B-bis. SERVER LINUX COMPROMESSO
+
+#### ① Quadro d'insieme
+Stesse fasi di **B**. Cambiano solo i tool: LiME al posto di FTK/WinPmem, `/proc` e cron al posto di Prefetch e Run keys.
+
+| Fase | → Step |
+|---|---|
+| Containment short-term | Isolamento di rete (come B.1) |
+| Raccolta evidenze | 1 · 2 · 4 |
+| Analisi persistenza | 3 |
+| Scoping · Eradication · Recovery | Come B.8 → B.10 (reinstallazione, rotazione chiavi SSH e credenziali) |
+
+#### ② Procedura tecnica
+
+**1. RAM** · *Evidenze* (modulo LiME compilato per il kernel del target, da USB)
+```bash
+sudo insmod lime.ko "path=/mnt/usb/<caso>/mem.lime format=lime"
+sha256sum /mnt/usb/<caso>/mem.lime
+```
+
+**2. Dati volatili** · *Evidenze*
+```bash
+date -u                                  > /mnt/usb/<caso>/ora.txt
+ps auxf                                  > /mnt/usb/<caso>/ps.txt
+ss -tunap                                > /mnt/usb/<caso>/ss.txt
+{ who; last -i | head -50; }             > /mnt/usb/<caso>/login.txt
+ls -la /tmp /var/tmp /dev/shm            # staging tipico di malware
+ls -l /proc/<PID>/exe                    # "(deleted)" = binario cancellato ancora in esecuzione
+cp /proc/<PID>/exe /mnt/usb/<caso>/pid<PID>.bin   # recuperalo
+lsof -p <PID>
+```
+
+**3. Persistenza** · *Analysis*
+```bash
+for u in $(cut -d: -f1 /etc/passwd); do echo "== $u"; crontab -l -u $u 2>/dev/null; done
+ls -la /etc/cron* /var/spool/cron
+systemctl list-units --type=service --state=running
+ls -la /etc/systemd/system/
+cat /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys
+grep -E ':0:' /etc/passwd                # UID 0 oltre a root = 🚩
+cat /home/*/.bash_history /root/.bash_history
+```
+
+**4. Disco** · *Evidenze*
+```bash
+sudo dd if=/dev/sda of=/mnt/usb/<caso>/disk.dd bs=4M status=progress && sha256sum /mnt/usb/<caso>/disk.dd
+```
+
+---
+
+### 🔑 C. ACCOUNT COMPROMESSO / BRUTE FORCE / PASSWORD SPRAY
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Analisi** | Molti **4625** → poi un **4624** = brute force riuscito · 1 IP → molti account = spray · codici errore 4625 (§11) · **Logon Type** 3/10 · geolocalizzazioni/orari anomali | 1 · 3 |
+| **Scoping** | Cosa ha fatto l'account **dopo** il login (4672, 4688/Sysmon 1, 5140, 4648) · altri account attaccati dallo stesso IP | 2 |
+| **Containment** | Disabilita o reset password + revoca sessioni · blocco IP sorgente · servizio esposto (RDP/VPN/OWA) dietro MFA/VPN | 4 |
+| **Eradication** | Persistenza creata dall'account: 4720, 4728/4732, 4698, 7045 · MFA e metodi di recovery modificati | 5 |
+| **Recovery** | Riabilita con MFA · monitoraggio mirato | 5 |
+| **Lessons Learned** | Account lockout policy · MFA ovunque · regola SIEM su N×4625 in X minuti | Report |
+
+#### ② Procedura tecnica
+
+**1. Conferma il pattern** · *Analysis* 🧪
+```splunk
+### brute force (1 account, molti tentativi) → cerca 4624 dopo i 4625
+index=* sourcetype=<WINSEC> (EventCode=4625 OR EventCode=4624) Account_Name="<user>" earliest=0
+| table _time, EventCode, Logon_Type, IpAddress, Workstation_Name, Status | sort _time asc
+### spray (1 IP, molti account)
+index=* sourcetype=<WINSEC> EventCode=4625 earliest=0
+| stats dc(Account_Name) as account, count by IpAddress | sort -account
+```
+`Status/Sub_Status`: `0xC0000064` utente inesistente (enumerazione) · `0xC000006A` password errata (utente valido!)
+⚠️ Nome campo IP varia: `IpAddress` / `Source_Network_Address` / `src_ip` → controlla con `| head 5`
+
+**2. Cosa ha fatto dopo il login riuscito** · *Scoping* 🧪
+```splunk
+index=* (Account_Name="<user>" OR User="*<user>") earliest=<ora_login>
+(EventCode=4672 OR EventCode=4688 OR EventCode=4648 OR EventCode=5140 OR EventCode=4720 OR EventCode=4728 OR EventCode=4732 OR EventCode=4698 OR EventCode=7045 OR EventCode=1)
+| table _time, host, EventCode, Image, CommandLine, ShareName, TargetUserName | sort _time asc
+```
+
+**3. SSH su Linux** · *Analysis* 🧪
+```bash
+grep "Failed password" /var/log/auth.log | awk '{print $(NF-3)}' | sort | uniq -c | sort -rn | head   # IP attaccanti
+grep "Accepted" /var/log/auth.log                                                                     # login riusciti 🚩
+sudo lastb | head -30          # login falliti
+last -i | head -30             # login riusciti con IP
+```
+
+**4. Blocca account e sorgente** · *Containment* 🏢
+```powershell
+Disable-ADAccount -Identity <user>
+Set-ADAccountPassword -Identity <user> -Reset -NewPassword (Read-Host -AsSecureString "Nuova pwd")
+Get-ADUser <user> -Properties LastLogonDate,PasswordLastSet,MemberOf,Enabled
+Revoke-MgUserSignInSession -UserId <upn>                      # se account cloud/ibrido
+New-NetFirewallRule -DisplayName "IR block <IP>" -Direction Inbound -RemoteAddress <IP> -Action Block
+```
+```bash
+sudo iptables -A INPUT -s <IP> -j DROP                        # Linux
+sudo passwd -l <user>                                         # blocca account Linux
+```
+
+**5. Rimuovi ciò che ha creato e riabilita** · *Eradication → Recovery* 🏢
+```powershell
+Get-ADGroupMember "Domain Admins"            # membri aggiunti di recente?
+Get-ADUser -Filter * -Properties whenCreated | ? whenCreated -gt (Get-Date).AddDays(-7) | select Name,whenCreated
+```
+Rimuovi account/gruppi/task/servizi creati (4720/4728/4732/4698/7045) · verifica metodi MFA registrati · riabilita l'account con MFA
+
+---
+
+### 🔒 D. RANSOMWARE
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Containment** ⚡ (PRIMA dell'analisi) | Isolamento immediato degli host colpiti (senza spegnere: la chiave può essere in RAM) · backup scollegati · share protette · account di propagazione disabilitati · segmentazione se diffuso | 1 |
+| **Analisi** | Famiglia (ransom note, estensione, hash) · segnali di preparazione (`vssadmin`, `bcdedit`, `wbadmin`) · processo che cifra | 2 · 3 |
+| **Scoping** | **Patient zero** e vettore iniziale (phishing, RDP esposto, VPN) · esfiltrazione prima della cifratura (double extortion)? | 3 · 4 |
+| **Eradication** | Reset di **tutte** le credenziali privilegiate (domain admin, service account, krbtgt ×2) · persistenza rimossa · patch del vettore | 5 |
+| **Recovery** | Backup **integri e non infetti** verificati prima del restore · ripristino per priorità di business · reimage | 5 |
+| **Lessons Learned** | Notifiche GDPR/NIS2 con CISO/legal · il pagamento è decisione del management, mai dell'analista · backup offline/immutabili | Report |
+
+#### ② Procedura tecnica
+
+**1. Contenimento immediato** · *Containment* 🏢
+- EDR → isola **tutti** gli host che mostrano cifratura · NON spegnere → dump RAM come in B.2
+- Scollega/stoppa il **backup** raggiungibile dalla rete
+- Sul file server: individua chi sta cifrando le share e taglialo fuori
+```powershell
+Get-SmbSession | sort NumOpens -Descending | select ClientComputerName, ClientUserName, NumOpens
+Get-SmbOpenFile | group ClientComputerName | sort Count -Descending
+Close-SmbSession -ClientComputerName <IP_host> -Force
+Disable-ADAccount -Identity <account_che_cifra>
+```
+
+**2. Identifica la famiglia** · *Analysis* 🏢
+Ransom note + un file cifrato → **ID Ransomware** · decryptor esistente? → **No More Ransom**
+
+**3. Patient zero e timeline** · *Analysis → Scoping* 🧪
+```splunk
+### primo host a creare file con la nuova estensione
+index=* sourcetype=<SYSMON> EventCode=11 TargetFilename="*.<estensione>" earliest=0
+| stats earliest(_time) as primo, count by Computer | sort primo | convert ctime(primo)
+### preparazione: shadow copy / recovery disabilitati
+index=* sourcetype=<SYSMON> EventCode=1 earliest=0
+(CommandLine="*vssadmin*delete*" OR CommandLine="*wmic*shadowcopy*delete*" OR CommandLine="*bcdedit*recoveryenabled*no*" OR CommandLine="*wbadmin*delete*")
+| table _time, Computer, User, ParentImage, CommandLine | sort _time asc
+### processo che cifra (chi scrive più file)
+index=* sourcetype=<SYSMON> EventCode=11 earliest=0 | stats count by Computer, Image | sort -count | head 10
+```
+Dal patient zero risali al vettore: mail (→ A) · RDP esposto (4624 Logon Type 10 da IP pubblico → C) · VPN
+
+**4. Esfiltrazione prima della cifratura?** · *Scoping*
+Double extortion → vai a **E**, cerca `rclone`, `megasync`, `winscp`, archivi `7z/rar`
+
+**5. Bonifica e ripristino** · *Eradication → Recovery* 🏢
+Reset account privilegiati + service account + **krbtgt due volte** (script Microsoft `New-KrbtgtKeys.ps1`, attendendo la replica tra i due reset) → reimage → verifica backup **integri e non cifrati** → restore per priorità
+
+---
+
+### 📤 E. DATA EXFILTRATION
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Analisi** | Host interno che invia **molto e riceve poco** · protocolli insoliti · **DNS tunneling** (sottodomini lunghi/random, molte query TXT) · cloud storage / porte non standard (T1571) · trasferimenti a orari regolari (T1029) | 1 · 2 |
+| **Scoping** | Quali host/utenti · **quali dati** (dimensione, share/cartelle: 5140, Sysmon 11) · destinazione · durata | 2 |
+| **Containment** | Blocco destinazione · isolamento host sorgente · account disabilitato | 3 |
+| **Eradication** | Tool/canale di exfil e malware associato rimossi (→ **B**) | 3 |
+| **Recovery** | Monitoraggio egress (DLP, proxy) | 3 |
+| **Lessons Learned** | **Classificazione dei dati usciti** → obblighi di notifica · regole su volumi anomali in uscita | 4 |
+
+#### ② Procedura tecnica
+
+**1. PCAP** · *Analysis* 🧪 (Wireshark)
+```
+Statistics → Conversations → IPv4 → ordina per "Bytes A → B"  (host interno che invia tanto)
+Statistics → Protocol Hierarchy                              (protocolli fuori posto)
+dns && len(dns.qry.name) > 50                                ← DNS tunneling (sottodomini lunghi)
+dns.qry.type == 16                                           ← query TXT (tunneling/C2)
+http.request.method == "POST" && ip.src == <interno>         ← upload HTTP
+ftp || ftp-data                                              ← FTP in chiaro → Follow TCP Stream
+tcp.port == 4444 || tcp.port == 8080                         ← porte non standard (adatta)
+File → Export Objects → HTTP / FTP-DATA / SMB                ← recupera ciò che è uscito
+```
+
+**2. SIEM** · *Analysis → Scoping* 🧪
+```splunk
+### volume in uscita per coppia (FortiGate)
+index=* sourcetype=fortigate_traffic earliest=0
+| stats sum(sentbyte) as out by srcip, dstip, dstport | sort -out | head 20
+### DNS tunneling
+index=* sourcetype=stream:dns earliest=0 | eval l=len(query) | where l>50
+| stats count by src_ip, query | sort -count
+### tool di exfil / archiviazione
+index=* sourcetype=<SYSMON> EventCode=1 earliest=0
+(CommandLine="*rclone*" OR CommandLine="*megasync*" OR CommandLine="*Compress-Archive*" OR CommandLine="*7z* a *" OR CommandLine="*rar* a *" OR CommandLine="*curl* -T *")
+| table _time, Computer, User, CommandLine
+### quale processo parla con la destinazione
+index=* sourcetype=<SYSMON> EventCode=3 DestinationIp="<IP_dest>" earliest=0 | stats count by Computer, Image, DestinationPort
+```
+
+**3. Chiudi il canale** · *Containment → Eradication* 🏢
+Blocco destinazione (firewall/proxy/DNS sinkhole) → isola l'host → disabilita l'account → processo trovato = malware → **B**
+
+**4. Quantifica** · *Lessons Learned*
+Cosa è uscito (file, dimensione, classificazione) → decide gli obblighi di notifica
+
+---
+
+### ↔️ F. LATERAL MOVEMENT / ATTIVITÀ SOSPETTA IN AD
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Analisi** | Logon Type 3/10 **tra workstation** · 4648 · 5140 su `ADMIN$`/`C$` · 7045 `PSEXESVC` · WinRM · RDP interno · Sysmon 10 su `lsass.exe` | 1 · 2 |
+| **Scoping** | **Percorso** host→host in ordine cronologico · account usati/rubati · arrivo a DC o server critici? | 3 |
+| **Containment** | Host del percorso isolati · account disabilitati/resettati · SMB/RDP/WinRM tra workstation bloccati | 4 |
+| **Eradication** | Reset di tutti gli account esposti (DC toccato → **krbtgt ×2**) · persistenza rimossa su ogni host del percorso | 4 |
+| **Recovery** | Monitoraggio intensivo AD (4728/4732, 4720) | 4 |
+| **Lessons Learned** | Tiering admin · LAPS · restrizione admin locale · segmentazione | Report |
+
+#### ② Procedura tecnica
+
+**1. Chi si è autenticato dove** · *Analysis* 🧪
+```splunk
+index=* sourcetype=<WINSEC> EventCode=4624 (Logon_Type=3 OR Logon_Type=10) earliest=0
+NOT Account_Name="*$"
+| stats count, values(host) as destinazioni by Account_Name, IpAddress | sort -count
+```
+
+**2. Tecniche specifiche** · *Analysis* 🧪
+| Tecnica | Query / indicatore |
+|---|---|
+| **PsExec** | `EventCode=7045 Service_Name="PSEXESVC"` · Sysmon 1 `ParentImage="*\\PSEXESVC.exe"` |
+| **WMI exec** | Sysmon 1 `ParentImage="*\\WmiPrvSE.exe" (Image="*\\cmd.exe" OR Image="*\\powershell.exe")` |
+| **WinRM / PS Remoting** | Sysmon 1 `ParentImage="*\\wsmprovhost.exe"` · porte 5985/5986 |
+| **Admin share** | `EventCode=5140 (Share_Name="*ADMIN$" OR Share_Name="*C$")` |
+| **RDP interno** | `EventCode=4624 Logon_Type=10` tra workstation |
+| **Credenziali esplicite** | `EventCode=4648` (runas, strumenti di lateral) |
+| **Dump LSASS** | Sysmon 10 `TargetImage="*\\lsass.exe"` (GrantedAccess `0x1010`/`0x1410`) · DeepBlueCLI → Mimikatz |
+
+**3. Ricostruisci il percorso** · *Scoping* 🧪
+Host A → B → C in ordine cronologico (`sort _time asc`) → ogni host del percorso = scenario **B**
+
+**4. Contieni e bonifica** · *Containment → Eradication → Recovery* 🏢
+Isola gli host del percorso · disabilita/reset account usati · DC toccato → reset **krbtgt ×2** · blocca SMB/RDP/WinRM tra workstation · alert su 4720/4728/4732
+
+---
+
+### 🌐 G. ATTACCO A WEB SERVER / WEB APPLICATION
+
+#### ① Quadro d'insieme
+| Fase | Cosa devi ottenere | → Step |
+|---|---|---|
+| **Analisi** | Picco di **404** (enumerazione) · SQLi · path traversal · XSS · molti **POST** sul login · user-agent di scanner | 1 |
+| **Compromissione?** | Richiesta malevola seguita da **200** · **webshell** nella web root · web server che genera `cmd.exe`/`sh` | 1 · 2 |
+| **Containment** | Blocco IP (WAF/firewall) · regola WAF sul pattern · server compromesso → offline o isolato | 3 |
+| **Eradication** | Webshell e file aggiunti rimossi · **patch** della vulnerabilità · rotazione credenziali DB/app | 3 |
+| **Recovery** | Restore da versione pulita · monitoraggio log web | 3 |
+| **Lessons Learned** | WAF · hardening · vulnerability management sull'applicazione | Report |
+
+#### ② Procedura tecnica
+
+**1. Analisi log** · *Analysis* 🧪 (Apache `/var/log/apache2/access.log` · IIS `C:\inetpub\logs\LogFiles\W3SVC1\`)
+```bash
+awk '{print $1}' access.log | sort | uniq -c | sort -rn | head          # IP più attivi
+awk '{print $9}' access.log | sort | uniq -c | sort -rn                 # distribuzione status code
+awk '$9==404 {print $1}' access.log | sort | uniq -c | sort -rn | head   # enumerazione (dirbusting)
+grep -iE "union.*select|%27|' or|or%201=1|sleep\(|information_schema" access.log   # SQLi
+grep -iE "\.\./|%2e%2e|/etc/passwd" access.log                            # path traversal / LFI
+grep -iE "<script|%3cscript" access.log                                   # XSS
+grep -iE "sqlmap|nikto|nmap|gobuster|dirbuster|wpscan|hydra" access.log   # scanner (user-agent)
+grep "<IP_attaccante>" access.log | awk '$9==200'                          # cosa ha avuto SUCCESSO
+grep "POST" access.log | awk '{print $1, $7}' | sort | uniq -c | sort -rn | head   # brute force form
+```
+Splunk: query *brute force su form web* (§1) su `stream:http`
+
+**2. Cerca webshell** · *Analysis* 🧪
+```bash
+find /var/www -type f \( -name "*.php" -o -name "*.jsp" \) -mtime -7 -ls
+grep -rlE "eval\(|base64_decode\(|system\(|shell_exec\(|passthru\(|assert\(" /var/www
+ps -ef --forest | grep -A3 www-data       # shell figlie del web server 🚩
+```
+```powershell
+Get-ChildItem C:\inetpub\wwwroot -Recurse -Include *.aspx,*.ashx,*.asp | ? LastWriteTime -gt (Get-Date).AddDays(-7)
+```
+```splunk
+index=* sourcetype=<SYSMON> EventCode=1 earliest=0
+(ParentImage="*\\w3wp.exe" OR ParentImage="*\\httpd.exe" OR ParentImage="*\\tomcat*.exe")
+(Image="*\\cmd.exe" OR Image="*\\powershell.exe") | table _time, Computer, ParentImage, CommandLine
+```
+
+**3. Blocca, bonifica, ripristina** · *Containment → Eradication → Recovery* 🏢
+Blocco IP (WAF/firewall, `iptables -A INPUT -s <IP> -j DROP`) → se compromesso: server offline + trattalo come **B/B-bis** → rimuovi webshell → **patch** della vulnerabilità → rotazione credenziali DB/app → restore da versione pulita
+
+---
+
+### 📝 Template minimo di incident report
+| Campo | Contenuto |
+|---|---|
+| Sommario | Cosa è successo in 3 righe (per il management) |
+| Severity e stato | Critica/Alta/Media/Bassa · Aperto/Contenuto/Chiuso |
+| Timeline | Evento per evento, `YYYY-MM-DD HH:MM:SS` + timezone |
+| Asset e account coinvolti | Host, IP, utenti |
+| Evidenze | File acquisiti + SHA256 + chi/quando (chain of custody) |
+| IOC | Hash (SHA256), IP, domini, URL — **defangati** |
+| MITRE ATT&CK | Tecniche osservate (§11) |
+| Azioni svolte | Contenimento, eradicazione, recovery con orari |
+| Root cause | Vettore iniziale e vulnerabilità/debolezza sfruttata |
+| Raccomandazioni | Cosa cambiare per non ripeterlo |
 
 ---
 
