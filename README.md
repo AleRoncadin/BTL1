@@ -274,6 +274,11 @@ volatility -f memdump.mem imageinfo
 # STEP 2 — ogni comando successivo richiede --profile
 volatility -f memdump.mem --profile=Win7SP1x64 <plugin>
 ```
+Nota: se il comando sopra non va provare:
+```bash
+python /volatility/vol.py -f memdump.mem imageinfo
+python /volatility/vol.py -f memdump.mem --profile=Win7SP1x64 <plugin>
+```
 ⚠️ Plugin **case sensitive**. Path con spazi → `"..."` o `\ `
 
 | Plugin | Cosa fa |
@@ -305,7 +310,7 @@ volatility -f mem.mem --profile=Win7SP1x64 pslist | grep "svchost.exe" | wc -l
 
 # estrarre + hashare un processo
 volatility -f mem.mem --profile=Win7SP1x64 procdump -p 2940 -D ./
-md5sum executable.2940.exe
+md5sum executable.2940.exe`
 ```
 
 ### Volatility 3 — nessun profilo
