@@ -90,9 +90,9 @@ sudo systemctl start Splunkd
 
 ### Discovery del dataset (fallo SEMPRE prima)
 ```splunk
-index=* | stats count by sourcetype          ← quali log esistono?
-index=* sourcetype=<X> | head 5              ← come si chiamano i campi?
-| fieldsummary                               ← elenca tutti i campi
+index=* | stats count by sourcetype      ← quali log esistono?
+index=* sourcetype=<X> | head 5          ← come si chiamano i campi?
+index=* sourcetype=<X> | fieldsummary    ← elenca tutti i campi
 ```
 
 ### Query base
