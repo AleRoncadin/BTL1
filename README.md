@@ -205,6 +205,43 @@ index=* (EventCode=1102 OR EventCode=104) earliest=0
 index=* sourcetype=<SYSMON> EventCode=1 earliest=0
 (CommandLine="*vssadmin*delete*shadow*" OR CommandLine="*bcdedit*recoveryenabled*no*")
 | table _time, Computer, User, CommandLine
+
+### Web scan da alert IDS (nome, src, dest)
+index=* sourcetype=suricata event_type=alert (alert.signature="*scan*" OR alert.signature="*Nikto*" OR alert.signature="*sqlmap*" OR alert.signature="*Acunetix*" OR alert.signature="*Nessus*" OR alert.signature="*dirbuster*" OR alert.signature="*WPScan*") earliest=0
+| stats count, values(dest_port) as dest_port, min(_time) as first, max(_time) as last by alert.signature, src_ip, dest_ip
+| sort -count
+
+### Scanner identificati da User-Agent (Suricata http)
+index=* sourcetype=suricata event_type=http earliest=0
+| search http.http_user_agent IN ("*nikto*","*sqlmap*","*acunetix*","*nessus*","*nmap*","*wpscan*","*gobuster*","*dirbuster*","*ffuf*","*masscan*","*burp*","*zgrab*")
+| stats count, dc(http.url) as url_unici by http.http_user_agent, src_ip, dest_ip, http.hostname
+
+### Scanner da User-Agent (stream:http)
+index=* sourcetype=stream:http earliest=0
+| search http_user_agent IN ("*nikto*","*sqlmap*","*acunetix*","*nessus*","*nmap*","*wpscan*","*gobuster*","*dirbuster*","*ffuf*")
+| stats count, dc(uri_path) as url_unici by http_user_agent, src_ip, dest_ip, site
+
+### Scan generico: 1 IP, molte URL, molti 404 (access log / stream)
+index=* sourcetype=stream:http earliest=0
+| stats count, dc(uri_path) as url_uniche, count(eval(status=404)) as n404 by src_ip, dest_ip, site
+| where url_uniche>50 AND n404>30
+| sort -count
+
+### Directory/file brute force (rate per minuto)
+index=* sourcetype=stream:http status=404 earliest=0
+| bin _time span=1m
+| stats count by _time, src_ip, dest_ip
+| where count>50
+
+### Scan di porte (vertical scan, 1 src -> 1 dest)
+index=* sourcetype=suricata event_type=flow earliest=0
+| stats dc(dest_port) as porte, count by src_ip, dest_ip
+| where porte>50 | sort -porte
+
+### Top signature Suricata per coppia IP
+index=* sourcetype=suricata event_type=alert src_ip=<IP1> dest_ip=<IP2> earliest=0
+| stats count by alert.signature, alert.category, alert.severity
+| sort -count
 ```
 
 ### Alert e Dashboard
