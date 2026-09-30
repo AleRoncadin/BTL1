@@ -77,7 +77,7 @@
 ---
 
 ## 1. SPLUNK (SPL)
-
+ 
 ### Avvio + primi 60 secondi
 ```bash
 sudo systemctl start Splunkd
@@ -87,14 +87,17 @@ sudo systemctl start Splunkd
 - [ ] Time picker → **All Time** (i dati sono del 2016!)
 - [ ] Sampling → **No Event Sampling**
 - [ ] La query inizia con `index=`
-
 ### Discovery del dataset (fallo SEMPRE prima)
 ```splunk
 index=* | stats count by sourcetype      ← quali log esistono?
 index=* sourcetype=<X> | head 5          ← come si chiamano i campi?
 index=* sourcetype=<X> | fieldsummary    ← elenca tutti i campi
 ```
-
+- Non conosci il campo? **Parola nuda** nella search (`vulnerability`, `Acunetix`, un IP): full-text sul raw, il termine compare **evidenziato** negli eventi → così scopri in quali campi sta
+- Solo per scoprire i sourcetype/campi: sampling **1:100** (veloce) → poi rimetti **No Event Sampling** per la ricerca vera
+- Ti basta 1 evento (es. un hash)? **Stop** (quadrato sotto la search bar) appena compare
+- Campo non visibile nel pannello Event Details? Espandi con **`>`** o **"Show as raw text"** (es. `action` di Suricata, `alert.signature`)
+- Interesting Fields → click sul campo = conteggio per valore (se i valori unici sono >100 non li vedi → usa `stats`) · click sul valore = lo aggiunge alla query
 ### Query base
 ```splunk
 index="botsv1" sourcetype=<X> earliest=0
@@ -105,7 +108,7 @@ index="botsv1" sourcetype=<X> earliest=0
 | `sourcetype=` | Tipo di log — **mettilo sempre**: velocizza e garantisce che i campi esistano |
 | `earliest=0` | Dal primo evento disponibile |
 | parola nuda | Full-text nel raw event (es. `osk.exe`) |
-
+ 
 ### Comandi core
 ```splunk
 | stats count by <campo>                     ← conta occorrenze per valore
@@ -118,8 +121,10 @@ index="botsv1" sourcetype=<X> earliest=0
 | dedup <campo>                              ← scopri QUALI valori esistono
 | head 20                                    ← primi 20 risultati
 | spath <campo>                              ← estrai campo da JSON/XML
+| spath timestamp | search timestamp="<valore esatto>"   ← isola UN evento a un timestamp preciso
+| eval full_url=hostname.url                 ← concatena due campi (il "." unisce)
 ```
-
+ 
 ### Operatori
 ```splunk
 EventCode=4624 OR EventCode=4625
@@ -128,130 +133,168 @@ dst="10.10.10.*"                             ← wildcard
 Image="*\\cmd.exe"
 pass* AND fail*
 ```
-
+ 
 ### Time modifiers
 ```splunk
 earliest=0                    ← tutto
 earliest=-24h latest=now
 earliest=-7d@d latest=@d      ← ultimi 7 giorni completi (@ = snap to)
 ```
-
+⚠️ **Timestamp nelle risposte:** se la domanda dice "usa il timestamp del **log**" (non la colonna Time di Splunk) → guarda i campi del log (`date`, `time`) e non `_time`: possono differire per timezone. Confronto rapido: `| sort _time asc | table _time, date, time`
+ 
 ### Sourcetype comuni (BOTSv1)
 | Sourcetype | Contiene |
 |---|---|
-| `stream:http` | `form_data`, `uri`, `http_method`, `src_ip` |
-| `fortigate_utm` | `srcip`, `dstip`, `srccountry`, `attack`, `msg` |
+| `stream:http` | `form_data`, `uri`, `http_method`, `src_ip`, `dest_ip`, `status`, `http_user_agent` |
+| `fortigate_utm` | `srcip`, `dstip`, `srccountry`, `attack`, `msg`, `url_domain`, `appcat` (categoria), `app` (minaccia), `ref` (URL FortiGuard), `severity`, `dest_port` ⚠️ |
 | `fortigate_traffic` / `fgt_traffic` | `srcip`, `dstip`, `action` |
-| `suricata` | `event_type=alert`, `alert.signature`, `severity` |
-| `xmlwineventlog` | **Sysmon**: `Image`, `CommandLine`, `Hashes`, `DestinationPort` |
+| `suricata` | `event_type=alert`, `src_ip`, `dest_ip`, `dest_port`, `alert.signature`, `signature`, `alert.category`, `severity` (testo low/medium/high ← usa questo) / `alert.severity` (numerico), `hostname`, `url`, `status` (HTTP), `action` |
+| `xmlwineventlog` | **Sysmon**: `Image`, `CommandLine`, `Hashes`, `DestinationIp`, `DestinationPort`, `SourceIp`, `Computer`, `SourceHostname`, `User` |
 | `wineventlog` | Windows Event Log |
 | `stream:dns` / `stream:smb` / `stream:ldap` | Traffico per protocollo |
-
+ 
+⚠️ **Nomi campo diversi per sorgente:** Fortigate `srcip`/`dstip` (ma `dest_port`!) · Suricata/stream `src_ip`/`dest_ip` · Sysmon `SourceIp`/`DestinationIp`. Se una query dà 0 risultati controlla prima il nome del campo con `| head 5`.
+ 
 ### Query pronte
 ```splunk
 ### Brute force su form web
 index=* sourcetype=stream:http http_method=POST uri="<path>" earliest=0
 | table timestamp, src_ip, form_data | sort timestamp asc
-
+ 
 ### Login falliti per utente
 index=* sourcetype=<WINSEC> EventCode=4625 earliest=0
 | stats count by Account_Name, IpAddress | sort -count
-
+ 
 ### Password spray (1 IP, molti account)
 index=* sourcetype=<WINSEC> EventCode=4625 earliest=0
 | stats dc(Account_Name) as account, count by IpAddress | sort -account
-
+ 
 ### Brute force RIUSCITO (timeline account)
 index=* sourcetype=<WINSEC> (EventCode=4624 OR EventCode=4625) Account_Name="<user>" earliest=0
 | table _time, EventCode, IpAddress, Logon_Type | sort _time asc
-
+ 
 ### Processo con nome legittimo ma PATH sbagliato (masquerading)
 index=* sourcetype=<SYSMON> EventCode=1 earliest=0
 Image="*\\<nome>.exe" NOT Image="C:\\Windows\\System32\\*"
 | table _time, Computer, User, Image, CommandLine | dedup Image
-
+ 
 ### Office che genera shell (macro malevola)
 index=* sourcetype=<SYSMON> EventCode=1 earliest=0
 (ParentImage="*\\winword.exe" OR ParentImage="*\\excel.exe")
 (Image="*\\powershell.exe" OR Image="*\\cmd.exe")
 | table _time, Computer, User, ParentImage, Image, CommandLine
-
+ 
 ### PowerShell encoded
 index=* sourcetype=<SYSMON> EventCode=1 earliest=0
 (CommandLine="* -enc *" OR CommandLine="* -EncodedCommand *")
 | table _time, Computer, User, CommandLine
-
+ 
 ### Connessioni di rete di un processo
 index=* sourcetype=<SYSMON> EventCode=3 Image="*<nome>.exe" earliest=0
 | stats count by DestinationIp, DestinationPort | sort -count
-
+ 
 ### Quanti IP unici contatta (n. righe in Statistics = risposta)
 index=* sourcetype=<SYSMON> Image="<path>" DestinationPort=<porta> earliest=0
 | stats count by DestinationIp
-
+ 
 ### Hash di un file (Sysmon EventID 7)
 index=* sourcetype=<SYSMON> EventCode=7 ImageLoaded="*<nome>.exe" earliest=0
 | table _time, Computer, ImageLoaded, Hashes
-
+ 
 ### Alert IDS su coppia IP
 index=* sourcetype=suricata event_type=alert src_ip=<IP1> dest_ip=<IP2> earliest=0
 | table _time, src_ip, dest_ip, dest_port, alert.signature, severity
-
+ 
 ### Log cancellati (anti-forensics)
 index=* (EventCode=1102 OR EventCode=104) earliest=0
 | table _time, ComputerName, Account_Name, EventCode
-
+ 
 ### Shadow copy eliminate (precursore ransomware)
 index=* sourcetype=<SYSMON> EventCode=1 earliest=0
 (CommandLine="*vssadmin*delete*shadow*" OR CommandLine="*bcdedit*recoveryenabled*no*")
 | table _time, Computer, User, CommandLine
-
+ 
 ### Web scan da alert IDS (nome, src, dest)
 index=* sourcetype=suricata event_type=alert (alert.signature="*scan*" OR alert.signature="*Nikto*" OR alert.signature="*sqlmap*" OR alert.signature="*Acunetix*" OR alert.signature="*Nessus*" OR alert.signature="*dirbuster*" OR alert.signature="*WPScan*") earliest=0
 | stats count, values(dest_port) as dest_port, min(_time) as first, max(_time) as last by alert.signature, src_ip, dest_ip
 | sort -count
-
+ 
 ### Scanner identificati da User-Agent (Suricata http)
 index=* sourcetype=suricata event_type=http earliest=0
 | search http.http_user_agent IN ("*nikto*","*sqlmap*","*acunetix*","*nessus*","*nmap*","*wpscan*","*gobuster*","*dirbuster*","*ffuf*","*masscan*","*burp*","*zgrab*")
 | stats count, dc(http.url) as url_unici by http.http_user_agent, src_ip, dest_ip, http.hostname
-
+ 
 ### Scanner da User-Agent (stream:http)
 index=* sourcetype=stream:http earliest=0
 | search http_user_agent IN ("*nikto*","*sqlmap*","*acunetix*","*nessus*","*nmap*","*wpscan*","*gobuster*","*dirbuster*","*ffuf*")
 | stats count, dc(uri_path) as url_unici by http_user_agent, src_ip, dest_ip, site
-
+ 
 ### Scan generico: 1 IP, molte URL, molti 404 (access log / stream)
 index=* sourcetype=stream:http earliest=0
 | stats count, dc(uri_path) as url_uniche, count(eval(status=404)) as n404 by src_ip, dest_ip, site
 | where url_uniche>50 AND n404>30
 | sort -count
-
+ 
 ### Directory/file brute force (rate per minuto)
 index=* sourcetype=stream:http status=404 earliest=0
 | bin _time span=1m
 | stats count by _time, src_ip, dest_ip
 | where count>50
-
+ 
 ### Scan di porte (vertical scan, 1 src -> 1 dest)
 index=* sourcetype=suricata event_type=flow earliest=0
 | stats dc(dest_port) as porte, count by src_ip, dest_ip
 | where porte>50 | sort -porte
-
+ 
 ### Top signature Suricata per coppia IP
 index=* sourcetype=suricata event_type=alert src_ip=<IP1> dest_ip=<IP2> earliest=0
 | stats count by alert.signature, alert.category, alert.severity
 | sort -count
+ 
+### Scanner web da Fortigate (nome scanner, IP attaccante, IP server, paese)
+index=* sourcetype=fortigate_utm url_domain="<dominio>" vulnerability earliest=0
+| table _time, date, time, srcip, dstip, srccountry, attack, msg | sort _time asc
+# il termine "vulnerability" compare evidenziato in `attack` e `msg`
+ 
+### IP → hostname (Fortigate/Suricata NON hanno l'hostname → pivot su Sysmon)
+index=* sourcetype=xmlwineventlog <IP_attaccante> <IP_interno> earliest=0
+| stats count by SourceHostname | sort - count
+# solo con l'IP interno escono più hostname; aggiungere l'IP dell'attaccante restringe a uno
+ 
+### URL completo attaccato + esito (Suricata)
+index=* sourcetype=suricata event_type=alert earliest=0
+| eval full_url=hostname.url
+| table _time, src_ip, dest_ip, full_url, status, action, signature
+# status 404 = attacco fallito · action = allowed/blocked (spesso visibile solo in "Show as raw text")
+ 
+### Alert Suricata con risposta 200 + CVE nella signature
+index=* sourcetype=suricata event_type=alert status=200 earliest=0
+| stats count by signature
+# cerca "CVE-xxxx-xxxx" → NVD dal browser → CVSS v3 · n. signature uniche = n. righe in Statistics
+ 
+### Conteggio per severity (base per i pie chart)
+index=* sourcetype=suricata event_type=alert earliest=0 | stats count by severity
+index=* sourcetype=fortigate_utm earliest=0 | stats count by severity
 ```
-
+ 
 ### Alert e Dashboard
 ```
 Query → Save As → Alert       (Private/Shared · Scheduled/Real-time · threshold · azioni)
 Query → Save As → Report      → apri il report → "Add to Dashboard"
-Dashboard → Edit → "Select Visualization" → Pie/Line/Bar
+Query → Save As → Existing Dashboard → scegli la dashboard      ← via diretta (usata nei lab)
+Dashboard → Edit → "Select Visualization" → Pie/Line/Bar   (hover sulla fetta = count%)
 Dashboard → Edit → icona LENTE sul panel → VEDI la query che lo alimenta
+Dashboard → Edit → trascina dal bordo ::::: del panel → riposiziona (poi Save)
 Naming convention: <group>_<object>_<description>
 ```
+ 
+### Dopo Splunk → OSINT (dal TUO browser, nel lab d'esame non c'è internet)
+| Ho... | Vado su |
+|---|---|
+| Hash SHA256 | VirusTotal → tab Detection → nome famiglia ricorrente (es. Cerber) |
+| Nome eseguibile sospetto | Google "what is <file>.exe" → nome feature + path legittimo |
+| CVE (da signature) | NVD → CVSS v3 |
+| `ref` / VID Fortigate | FortiGuard → search → **ID Lookup** → Affected Products + CVE |
 
 ---
 
