@@ -299,7 +299,7 @@ Naming convention: <group>_<object>_<description>
 ---
 
 ## 2. WIRESHARK (PCAP)
-
+ 
 ### Display filter — sintassi
 ```
 udp                                  ← solo pacchetti UDP
@@ -311,35 +311,94 @@ ntp or udp.port == 20000             ← OR: || o or
 not ftp                              ← NOT: ! o not
 ftp                                  ← tutto il traffico FTP
 arp                                  ← traffico ARP (scan di rete!)
+frame.number == 4612                 ← un pacchetto preciso (o Ctrl+G → numero)
+frame contains "password"            ← full-text su tutto il pacchetto
 ```
-💡 **Non ricordi il nome del campo?** Hover sull'hex dump → il nome compare in basso (es. `tcp.seq`)
-
+💡 **Non ricordi il nome del campo?** Hover sull'hex dump → il nome compare in basso (es. `tcp.seq`) · oppure right-click sul campo → **Apply as Filter → Selected**
+ 
+### Filtri per scenario
+```
+### Host discovery (PRIMA del TCP → livello 2/3, primi pacchetti del PCAP)
+arp.opcode == 1                      ← richieste ARP: "Who has X? Tell <SCANNER>" su IP sequenziali = ARP sweep
+icmp.type == 8                       ← echo request verso molti IP = ping sweep
+ 
+### Port scan
+tcp.flags.syn == 1 && tcp.flags.ack == 0          ← SYN (scan + inizio connessioni)
+tcp.flags.reset == 1                              ← RST = porta chiusa
+ip.src == <attaccante> && tcp.flags.syn == 1 && tcp.flags.ack == 0
+ 
+### HTTP
+http.request.method == "GET" / "POST"
+http.response.code == 200 / 404
+http.request.uri contains "robots"
+http.server                                       ← banner del web server (es. Apache/2.4.38)
+ 
+### FTP
+ftp.request.command == "USER"                     ← username tentati
+ftp.request.command == "PASS"                     ← password tentate (dictionary attack → il PRIMO = inizio attacco)
+ftp.response.code == 230                          ← login RIUSCITO
+ftp.response.code == 530                          ← login fallito
+ftp.request.command == "RETR"                     ← download · "STOR" = upload
+ftp-data                                          ← contenuto dei file trasferiti
+```
+⚠️ Chi è il **server**? Chi **manda** le risposte (`Response: 220`, `HTTP/1.1 200 OK`) è il server → colonna **Source** di quel pacchetto.
+ 
+### Codici FTP (colonna Info / Follow Stream)
+| Codice / comando | Significato |
+|---|---|
+| `220` | Banner: server pronto (spesso contiene nome/versione e info tipo n. max utenti) |
+| `USER` / `PASS` | Credenziali in **chiaro** |
+| `331` | Username OK, serve la password |
+| `230` | **Login riuscito** 🚩 |
+| `530` | Login fallito |
+| `RETR <file>` | **Download** dal server |
+| `STOR <file>` | **Upload** sul server |
+| `226` | Trasferimento completato |
+ 
 ### Azioni chiave
 | Azione | Come |
 |---|---|
-| **Follow Stream** | Right-click su pacchetto → Follow → TCP/UDP/SSL/HTTP Stream (rosso=request, blu=response) |
-| **Esportare file trasmessi** | `File → Export Objects → HTTP` (o SMB/FTP-DATA) |
+| **Follow Stream** | Right-click su pacchetto → Follow → TCP/UDP/SSL/HTTP Stream (rosso=client/request, blu=server/response) |
+| **Dallo stream al pacchetto** | Nella finestra Follow Stream **click su una riga** (es. `RETR`) → Wireshark seleziona quel pacchetto → chiudi e leggi il Time |
+| **Esportare file trasmessi** | `File → Export Objects → HTTP` (o SMB/FTP-DATA/TFTP) → colonna `Packet` per trovare il pacchetto giusto · `Content Type` (es. `application/zip`) |
+| **Dall'export al pacchetto** | Click sulla riga in Export Objects → salta al pacchetto nella finestra principale |
+| **Saltare a un pacchetto** | `Ctrl+G` → numero |
 | **Aggiungere colonna** | Right-click su campo header → **Apply as Column** |
-| **Mostrare data e ora reali** | `View → Time Display Format → Date and Time of Day` |
+| **Mostrare data e ora reali** | `View → Time Display Format → Date and Time of Day` (default = secondi dall'inizio cattura!) |
 | **Filtrare da una statistica** | Right-click su riga → **Apply as Filter → Selected** |
-
+ 
+### Porte server / client di un download
+Pacchetto con la risposta del server (`200 OK` + contenuto) → pannello **TCP**:
+- `Source Port` = **server** (es. 80)
+- `Destination Port` = **client** (porta effimera alta)
 ### Le 3 finestre statistiche (`Statistics → ...`)
 | Finestra | Cosa ti dice | 🚩 Segnale |
 |---|---|---|
-| **Protocol Hierarchy** | % per protocollo | Protocollo raro/insolito in quella rete = possibile exfil |
-| **Conversations** | Chi↔chi, porte, byte/pacchetti | Molto inviato + poco ricevuto = exfil |
+| **Protocol Hierarchy** | % per protocollo | Protocollo raro/insolito in quella rete = possibile exfil · ARP/ICMP abbondante = discovery |
+| **Conversations** | Chi↔chi, porte, byte/pacchetti | Molto inviato + poco ricevuto = exfil · **1 src → 1 dst, porte dst diverse, 2 pacchetti ciascuna (SYN+RST) = port scan** (tab TCP) · tab **Ethernet** per ARP |
 | **Endpoints** | Volume per host | Trasmette>>riceve = upload/exfil · Riceve>>trasmette = download |
-
+ 
 ### Workflow tipico su un PCAP sconosciuto
 ```
-1. Statistics → Protocol Hierarchy      → panoramica, protocolli anomali
-2. Statistics → Conversations → TCP     → chi parla con chi, volumi
-3. Filtra sul protocollo/host sospetto  (ftp, http, ecc.)
-4. Follow TCP Stream                    → leggi la conversazione in chiaro
-5. File → Export Objects → HTTP         → estrai file trasmessi
-6. View → Time Display Format           → per rispondere a domande sull'orario
+1. View → Time Display Format → Date and Time of Day   → subito, prima di leggere orari
+2. Statistics → Protocol Hierarchy      → panoramica, protocolli anomali
+3. Primi pacchetti: ARP/ICMP?           → host discovery (IP dopo "Tell" = scanner)
+4. Statistics → Conversations → TCP     → chi parla con chi, volumi, port scan
+5. Filtra sul protocollo/host sospetto  (ftp, http, ecc.)
+6. Follow TCP Stream                    → leggi la conversazione in chiaro
+7. File → Export Objects → HTTP         → estrai file trasmessi
 ```
 💡 **FTP e HTTP sono in chiaro** → credenziali e file leggibili con Follow Stream.
+ 
+### File estratto → hash e contenuto
+```bash
+bash                                  # se il terminale non parte in bash
+md5sum cr4ckx0r.zip                   # hash dello ZIP (attento: MD5 o SHA256?)
+unzip -l cr4ckx0r.zip                 # elenca il contenuto senza estrarre
+unzip cr4ckx0r.zip                    # estrai (o GUI: right-click → Extract Here)
+md5sum <file_interno>                 # hash del file dentro lo ZIP
+cat <pagina>.html                     # pagina 404 esportata → versione del server nel footer
+```
 
 ---
 
