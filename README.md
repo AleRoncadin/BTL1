@@ -404,6 +404,17 @@ cat <pagina>.html                     # pagina 404 esportata → versione del se
 
 ## 3. VOLATILITY (memoria)
 
+> Il lab può usare **Vol2** (profili) e/o **Vol3** (symbol table, nessun profilo). Come capire quale hai: se `imageinfo` non esiste, o se `-p 2416` ti stampa solo l'help/usage → è **Vol3**. Se i plugin si chiamano `windows.pslist` → Vol3.
+
+| | Vol2 | Vol3 |
+|---|---|---|
+| Plugin | `pslist` | `windows.pslist` |
+| Profilo | `imageinfo` + `--profile=...` | nessuno (rileva da solo) |
+| PID | `-p 2416` | `--pid 2416` |
+| Cartella output | `-D ./` / `--dump-dir=./` | `-o ./` (globale, **prima** del plugin) |
+
+---
+
 ### Volatility 2 — il profilo è obbligatorio
 ```bash
 # STEP 1 sempre per primo
@@ -433,7 +444,8 @@ python /volatility/vol.py -f memdump.mem --profile=Win7SP1x64 <plugin>
 | `dlllist -p PID` | DLL caricate |
 | `netscan` | Connessioni di rete |
 | `filescan` | Tutti i file nel dump |
-| `dumpfiles -n --dump-dir=./` | Estrae file |
+| `dumpfiles -Q <offset> -D <dir>` | Estrae un file (offset preso da `filescan`) |
+| `dumpfiles -n -i -r <regex> -D <dir>` | Estrae i file per nome (regex) |
 | `hivelist` | Registry hive |
 | `hashdump` | Hash password |
 | `malfind` | Code injection / regioni sospette |
@@ -442,40 +454,177 @@ python /volatility/vol.py -f memdump.mem --profile=Win7SP1x64 <plugin>
 | `iehistory` | Cronologia IE |
 | `timeliner` | Timeline eventi |
 
-### Combo utili
+### Combo utili (Vol2)
 ```bash
 # contare occorrenze di un processo
 volatility -f mem.mem --profile=Win7SP1x64 pslist | grep "svchost.exe" | wc -l
 
 # estrarre + hashare un processo
 volatility -f mem.mem --profile=Win7SP1x64 procdump -p 2940 -D ./
-md5sum executable.2940.exe`
+md5sum executable.2940.exe
 ```
 
-### Volatility 3 — nessun profilo
+---
+
+### Volatility 3 — sintassi base
 ```bash
-python3 vol.py -f memory.raw windows.info
-python3 vol.py -f memory.raw windows.pslist
-python3 vol.py -f memory.raw windows.pstree
-python3 vol.py -f memory.raw windows.psscan
-python3 vol.py -f memory.raw windows.cmdline
-python3 vol.py -f memory.raw windows.netscan
-python3 vol.py -f memory.raw windows.malfind
-python3 vol.py -f memory.raw windows.registry.hivelist
+# Linux / lab
+python3 vol.py -f memory.raw <plugin> [opzioni del plugin]
+vol -f memory.raw <plugin>                  # se installato come comando
+
+# Windows (standalone)
+vol.exe -f "C:\path\malware3.elf" windows.pslist
 ```
 
-### Metodologia
+**Regola d'oro:** le opzioni **globali** (`-f`, `-o`, `-r`, `-q`, `-v`, `-s`, `-p`...) vanno **PRIMA** del nome del plugin. Le opzioni **del plugin** (`--pid`, `--dump`...) vanno **DOPO**.
 ```
-1. imageinfo → profilo
-2. pslist + pstree → relazioni parent-child ANOMALE
+vol  [GLOBALI: -f -o -r -q -v]  <plugin>  [DEL PLUGIN: --pid --dump]
+```
+
+⚠️ In Vol3 il PID è **`--pid`**.
+```bash
+vol -f mem.raw windows.cmdline -p 2416          # ❌ stampa l'help/usage
+vol -f mem.raw windows.cmdline --pid 2416       # ✅
+vol -f mem.raw windows.pslist --pid 4 2416 3000 # ✅ più PID insieme
+```
+
+### Opzioni globali utili
+| Opzione | Cosa fa |
+|---|---|
+| `-f <file>` | Dump di memoria (path con spazi → `"..."`) |
+| `-o <dir>` | Cartella di output per i file estratti (`--dump`). Se manca, i file finiscono nella cartella corrente |
+| `-r csv` / `json` / `pretty` / `quick` | Formato output (`csv` per Timeline Explorer / Excel) |
+| `-q` | Quiet: niente barra di progresso (utile con `>` e pipe) |
+| `-v` / `-vv` | Verbose / debug (per capire perché non riconosce l'immagine) |
+| `-s <dir>` | Cartella extra con le symbol table |
+| `--offline` | Non scaricare symbol dal web (lab senza internet) |
+| `-h` | Help globale · `vol -f x windows.pslist -h` = help del plugin |
+
+⚠️ **Symbol table:** al primo uso su un dump Windows Vol3 può scaricare i symbol da Microsoft (serve internet). **Nel lab d'esame internet non c'è** → se resta bloccato su "Scanning/Downloading" o dice *"A symbol table is required"* / *"Unsatisfied requirement"*, controlla che nella cartella `symbols/` ci sia `windows.zip` (o `linux.zip` / `mac.zip`) e usa `--offline`.
+
+### Plugin Windows — equivalenze Vol2 → Vol3
+| Vol2 | **Vol3** | Cosa fa |
+|---|---|---|
+| `imageinfo` | `windows.info` | OS, build, architettura, KDBG, n. CPU, ora di sistema |
+| `pslist` | `windows.pslist` | Lista processi (PID, PPID, start/exit time) |
+| `pstree` | `windows.pstree` | Processi ad albero (parent-child) |
+| `psscan` | `windows.psscan` | Scansione pool → processi **nascosti/terminati** |
+| `psxview` | `windows.psxview` (solo da v2.5.0; **non** nella 2.4.1) | Confronto tra metodi di enumerazione. Nella 2.4.1: `pslist` vs `psscan` a mano |
+| `cmdline -p` | `windows.cmdline --pid` | **Command line** di ogni processo |
+| `dlllist -p` | `windows.dlllist --pid` | DLL caricate |
+| `ldrmodules` | `windows.ldrmodules` | DLL "unlinked" (injection) |
+| `handles -p` | `windows.handles --pid` | Handle aperti (file, chiavi, mutex...) |
+| `getsids` | `windows.getsids` | SID/utente proprietario del processo |
+| `privs` | `windows.privileges` | Privilegi del token (es. `SeDebugPrivilege` 🚩) |
+| `envars` | `windows.envars` | Variabili d'ambiente del processo |
+| `netscan` | `windows.netscan` | Connessioni/socket (anche chiusi) |
+| `connections` | `windows.netstat` | Connessioni **attive** |
+| `filescan` | `windows.filescan` | File in memoria (offset + path) |
+| `dumpfiles` | `windows.dumpfiles` | Estrae file (`--physaddr` / `--virtaddr` da filescan, oppure `--pid`) |
+| `procdump -p` | `windows.pslist --pid X --dump` | Estrae l'**eseguibile** |
+| `memdump -p` | `windows.memmap --pid X --dump` | Estrae la **memoria** del processo |
+| `malfind` | `windows.malfind` (`--dump`) | Regioni RWX/injection |
+| `vadinfo -p` | `windows.vadinfo --pid` | Mappa VAD del processo |
+| `hivelist` | `windows.registry.hivelist` | Registry hive in memoria |
+| `printkey -K` | `windows.registry.printkey --key "..."` | Legge una chiave di registro |
+| `userassist` | `windows.registry.userassist` | Programmi eseguiti dall'utente (GUI) |
+| `hashdump` | `windows.hashdump` | Hash NTLM (serve SAM/SYSTEM in memoria) |
+| `lsadump` / `cachedump` | `windows.lsadump` / `windows.cachedump` | Segreti LSA / credenziali di dominio in cache |
+| `svcscan` | `windows.svcscan` | Servizi |
+| `cmdscan` / `consoles` | `windows.cmdscan` / `windows.consoles` | Comandi digitati in CMD |
+| `modules` / `driverscan` | `windows.modules` / `windows.driverscan` | Driver/moduli kernel (rootkit) |
+| `callbacks` / `ssdt` | `windows.callbacks` / `windows.ssdt` | Hook kernel |
+| `yarascan` | `yarascan.YaraScan` | Scansione con regole YARA |
+| `timeliner` | `timeliner.Timeliner` | Timeline eventi |
+| `iehistory` | *(non esiste)* | Usa `windows.filescan` + `strings` |
+
+### Esempi pronti (Vol3)
+```bash
+# ---- orientamento
+vol -f mem.raw windows.info
+vol -f mem.raw windows.pstree
+vol -f mem.raw windows.pslist | grep -i svchost            # Windows: | findstr /i svchost
+vol -f mem.raw windows.pslist | grep -ci "svchost.exe"     # conta le occorrenze
+
+# ---- un processo sospetto (esempio PID 2416)
+vol -f mem.raw windows.cmdline --pid 2416
+vol -f mem.raw windows.dlllist --pid 2416
+vol -f mem.raw windows.handles --pid 2416
+vol -f mem.raw windows.getsids --pid 2416
+vol -f mem.raw windows.privileges --pid 2416               # SeDebug/SeImpersonate/SeLoadDriver 🚩
+vol -f mem.raw windows.privileges --pid 2416 | grep -i "Present,Enabled"
+
+# ---- estrarre l'eseguibile e hasharlo (IOC)
+mkdir dump
+vol -f mem.raw -o dump windows.pslist --pid 2416 --dump    # -o PRIMA del plugin
+sha256sum dump/*                                           # Windows: Get-FileHash dump\*
+
+# ---- estrarre la memoria del processo (per strings)
+vol -f mem.raw -o dump windows.memmap --pid 2416 --dump
+
+# ---- rete
+vol -f mem.raw windows.netscan | grep -iE "ESTABLISHED|LISTENING"
+
+# ---- injection
+vol -f mem.raw windows.malfind
+vol -f mem.raw -o dump windows.malfind --pid 2416 --dump
+
+# ---- file in memoria
+vol -f mem.raw windows.filescan | grep -i "malware"        # → prendi l'offset (colonna Offset)
+vol -f mem.raw -o dump windows.dumpfiles --physaddr 0x<offset>
+# (l'offset di filescan è fisico; se non estrae nulla prova --virtaddr, oppure --pid <PID>)
+
+# ---- registro e credenziali
+vol -f mem.raw windows.registry.hivelist
+vol -f mem.raw windows.registry.printkey --key "Software\Microsoft\Windows\CurrentVersion\Run"
+vol -f mem.raw windows.hashdump
+
+# ---- salvare l'output per Timeline Explorer / Excel
+vol -q -f mem.raw -r csv windows.pslist > pslist.csv
+```
+⚠️ `dumpfiles` estrae solo ciò che riesce a ricostruire dalle strutture in memoria: un file visto in `filescan` può non essere recuperabile.
+
+### Plugin Linux (dump di una macchina Linux)
+```bash
+vol -f mem.lime linux.pslist
+vol -f mem.lime linux.pstree
+vol -f mem.lime linux.psaux          # processi + argomenti (≈ cmdline)
+vol -f mem.lime linux.bash           # history bash in RAM
+vol -f mem.lime linux.lsof           # file aperti
+vol -f mem.lime linux.malfind        # injection
+vol -f mem.lime linux.check_modules  # moduli kernel nascosti (rootkit)
+```
+⚠️ Per Linux serve la **symbol table del kernel esatto** (`.json.xz` in `symbols/linux/`, generabile con `dwarf2json`). Senza → *"A symbol table is required"*. Altri plugin (`linux.sockstat` ecc.) esistono solo nelle versioni più recenti → controlla con `vol -h`.
+
+---
+
+### Metodologia (Vol2 e Vol3)
+```
+1. imageinfo (Vol2) / windows.info (Vol3)  → profilo / OS giusto?
+2. pslist + pstree                         → relazioni parent-child ANOMALE
    🚩 svchost.exe→cmd.exe→ping.exe · WINWORD.EXE→powershell.exe
-3. psscan vs pslist → la DIFFERENZA = processi nascosti
-4. cmdline -p PID → cosa stava eseguendo
-5. netscan → 🚩 Foreign Address pubblici da processi che non dovrebbero fare rete
-6. procdump -p PID + hash → IOC
+3. psscan vs pslist                        → la DIFFERENZA = processi nascosti
+4. cmdline (-p / --pid) PID                → cosa stava eseguendo
+5. netscan                                 → 🚩 Foreign Address pubblici da processi che non dovrebbero fare rete
+6. windows.privileges / getsids --pid      → 🚩 SeDebugPrivilege, utente SYSTEM inatteso (Vol3)
+7. malfind                                 → 🚩 regioni RWX con header MZ
+8. procdump -p PID (Vol2) / pslist --pid PID --dump (Vol3) + hash → IOC → VirusTotal
 ```
 
 **GUI alternativa:** **Volatility Workbench** (solo Windows) — Browse Image → Platform → comando → Run
+
+### Vol3 — errori frequenti
+| Sintomo | Causa / Fix |
+|---|---|
+| Stampa solo `usage: volatility [-h] ...` | Opzione sbagliata/fuori posto. Classico: **`-p` invece di `--pid`**, o `--pid` messo prima del plugin |
+| *"invalid choice"* / plugin non trovato | Manca il prefisso: `pslist` → **`windows.pslist`** (Vol2 e Vol3 non sono intercambiabili) |
+| *"A symbol table is required"* / *"Unsatisfied requirement"* | Symbol mancanti: copia `windows.zip` in `symbols/`, usa `--offline`; per Linux serve l'ISF del kernel |
+| Fermo su "Downloading/Scanning" | Sta cercando i symbol online (niente internet nel lab) → vedi sopra |
+| Il dump finisce in un posto strano / non esce | `-o <dir>` è globale → **prima** del plugin. La cartella deve esistere |
+| `windows.*` non restituisce nulla su un `.elf` | Il dump potrebbe non essere Windows → prova `linux.pslist` (verifica con `windows.info`) |
+| `dumpfiles` non estrae | Prova `--physaddr` ↔ `--virtaddr`, oppure `--pid <PID>` |
+| `windows.psxview` non esiste | Plugin presente solo da v2.5.0 → usa `pslist` vs `psscan` |
+| Output lento/enorme | `-q`, redirigi su file (`> out.txt`) e filtra con `grep` / `findstr` |
 
 ---
 
