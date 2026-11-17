@@ -316,6 +316,27 @@ frame.number == 4612                 ← un pacchetto preciso (o Ctrl+G → nume
 frame contains "password"            ← full-text su tutto il pacchetto
 ```
 💡 **Non ricordi il nome del campo?** Hover sull'hex dump → il nome compare in basso (es. `tcp.seq`) · oppure right-click sul campo → **Apply as Filter → Selected**
+
+### Ricerca stringhe — tutto il pacchetto vs colonna Info
+```
+frame contains "ciao"                    ← byte grezzi, QUALSIASI protocollo (case-sensitive)
+frame matches "(?i)ciao"                 ← regex, case-insensitive
+frame contains 63:69:61:6f               ← stessa ricerca in hex
+tcp.payload contains "ciao"              ← solo payload TCP (udp.payload per UDP)
+frame contains "c\x00i\x00a\x00o\x00"    ← stringa UTF-16LE (nomi file/path SMB2 e Windows in generale)
+frame contains 63:00:69:00:61:00:6f:00   ← idem in hex
+
+_ws.col.info contains "ciao"             ← SOLO il testo della colonna Info (Wireshark < 4.2: _ws.col.Info)
+_ws.col.info matches "(?i)ciao"          ← colonna Info, case-insensitive
+lower(_ws.col.info) contains "ciao"      ← case-insensitive senza regex
+smb2 && _ws.col.info contains "$"        ← SMB2 con "$" nell'Info (es. share C$ / ADMIN$ / IPC$)
+_ws.col.info contains "-PC"              ← tutto ciò che ha "-PC" nell'Info
+(smb2 && _ws.col.info contains "$") || _ws.col.info contains "-PC"   ← entrambi nella stessa vista
+!(_ws.col.info contains "-PC")           ← esclusione
+```
+⚠️ `frame` = byte grezzi del singolo frame → **non** trova testo cifrato/compresso (TLS, SMB3 encryption, gzip) né stringhe spezzate su più segmenti TCP → **Ctrl+F** → *String* → *Packet bytes* con encoding **Narrow & Wide**, oppure Follow TCP Stream
+⚠️ `$` in `contains` è letterale · in `matches` è un'àncora regex → `matches "\\$"`
+💡 **Ctrl+F** → *String* → *Packet list* = cerca nel testo delle colonne (Info compresa) senza filtrare · `_ws.col.*` è più lento dei filtri sui campi
  
 ### Filtri per scenario
 ```
@@ -1273,6 +1294,8 @@ PRI = (Facility Code × 8) + Severity Value
 | Wireshark: risposta "ovvia" rifiutata (es. `upload.php`) | Controlla **Referer**, redirect `3xx` (header `Location`) e nome del campo nel form |
 | Wireshark: nome file rifiutato | Copialo **esatto** dal pacchetto: maiuscole/minuscole contano (`Dbfunctions.php` ≠ `dbfunctions.php`) |
 | Wireshark: tool di recon non trovati nel TCP | Cercali negli **User-Agent** HTTP (`http.user_agent`) |
+| Wireshark: `frame contains` non trova un nome file SMB | È in **UTF-16LE** → `frame contains "n\x00o\x00m\x00e\x00"` · oppure `_ws.col.info contains "nome"` |
+| Wireshark: `_ws.col.info` dà errore | Versione < 4.2 → `_ws.col.Info` (I maiuscola) |
 
 ---
 
