@@ -740,24 +740,60 @@ vol -f mem.lime linux.check_modules  # moduli kernel nascosti (rootkit)
 
 ### Autopsy
 ```
+NUOVO CASO
 Create New Case → nome + Base Directory (CARTELLA VUOTA)
 → Add Data Source → "Disk Image or VM File" → seleziona .E01/.img
 → Ingest Modules (Recent Activity, File Type ID, Exif Parser, Email Parser, ...)
 → attendi 10+ min
+
+CASO GIÀ PRONTO (.aut fornito dal lab, ingest già fatto)
+Open Case → seleziona il .aut
+→ popup "Missing Image" → YES → Browse al .E01 → Select Image
+   (con NO vedi l'albero ma NON il contenuto dei file)
 ```
+
+**Viewer in basso — i tab**
+| Tab | Uso |
+|---|---|
+| **Hex** | Byte grezzi |
+| **Text** → *Strings* / **Indexed Text** | Contenuto testuale di qualsiasi file (`.ini`, `.txt`, `.lnk`, history) |
+| **Application** | Viewer nativo: **registro** (hive), immagini, sqlite |
+| **File Metadata** | **MD5/SHA1**, MAC times, path |
+| **Results** | Dettaglio dell'artefatto selezionato (Program Name, Path, Count...) |
+
+💡 **Save Table as CSV** (in alto a destra di ogni vista) → apri con CSVQuickViewer
+💡 Click su un header di colonna = **ordina** (fondamentale per "primo/ultimo")
 
 | Cerco... | Dove |
 |---|---|
+| **Hash dell'immagine** (MD5/SHA1) | `Data Sources` → click sull'immagine → tab **File Metadata** |
 | **OS e versione** | Data Artifacts → Operating System Information → colonna `Program Name` |
-| **Hostname** | Stessa sezione → colonna `Name` |
+| **Hostname** | Stessa sezione → riga `SYSTEM` → colonna `Name` |
+| **Utenti reali** | **OS User Account** → ordina per **User ID**: RID **1001+** = utenti creati · 500 Administrator · 501 Guest · `S-1-5-18/19/20` = account di sistema |
+| **Ultimo utente loggato** | Stessa vista → ordina per **Date Accessed** ↓ · colonna **Count** = n. logon |
+| **Registro (qualsiasi chiave)** | `vol3/Windows/System32/config` → seleziona `SOFTWARE` / `SYSTEM` (o `Users/<u>/NTUSER.DAT`) → tab **Application** → naviga le chiavi |
+| **Nome scheda di rete** | `SOFTWARE` → `Microsoft\Windows NT\CurrentVersion\NetworkCards\<n>` → `Description` |
+| **IP del PC** (registro) | `SYSTEM` → `ControlSet001\Services\Tcpip\Parameters\Interfaces\{GUID}` → `IPAddress` / `DhcpIPAddress` |
+| **IP/MAC da un tool di rete** | Cartella del tool in `Program Files (x86)` → file `.ini`/`.dat` → **Text → Indexed Text** (es. Look@LAN `irunin.ini`: `LANIP=`, `LANNIC=`) · MAC da riformattare `XX-XX-XX-XX-XX-XX` |
 | **File scaricati** | Data Artifacts → **Web Downloads** (match su `Date Accessed`, poi `URL`) |
-| **Siti visitati** | Web History |
-| **File aperti di recente / path** | **Recent Documents** (basato su LNK) |
-| **File cancellati** | Recycle Bin |
-| **Software installato** | Installed Programs |
+| **Provenienza di un download** | File `<nome>:Zone.Identifier` (ADS accanto al file) → Text: `ZoneId=3` = da internet · `HostUrl=` = URL sorgente |
+| **Siti visitati** | Web History · ricerche fatte → **Web Search** |
+| **Preferiti / posizioni Maps** | **Web Bookmarks** (`places.sqlite`) → coordinate nell'URL o nel `Title` |
+| **File aperti di recente / path** | **Recent Documents** (basato su LNK) → tab Results → `Path` (anche di file non più presenti) |
+| **Programmi eseguiti** | **Run Programs** (da Prefetch: Program Name, Path, Count, data) · oppure `vol3/Windows/Prefetch` |
+| **Comandi PowerShell digitati** | `Users/<u>/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt` → **Text** · controlla **OGNI utente** |
+| **Script/tool dell'utente** | `Users/<u>/Desktop` e `Users/<u>/Downloads` di ogni utente |
+| **Contenuto di uno ZIP** | Autopsy **espande gli archivi** nell'albero → leggi i file interni senza estrarli |
+| **Cercare un nome/estensione/stringa** | **Keyword Search** (in alto a destra) → es. `.yar`, `mimikatz` · Exact / Substring / **Regex** · i risultati includono LNK, NTUSER.DAT, file cancellati → path originale in Indexed Text |
+| **Immagini (wallpaper, foto)** | Toolbar → **Images/Videos** → *Group By: Path* → `Users/<u>/...` · allarga la finestra per leggere testo sovraimpresso |
+| **File cancellati** | Recycle Bin · Views → **Deleted Files** |
+| **Software installato** | Installed Programs (valuta i nomi sospetti → Google dal tuo browser) |
+| **Chiavette USB** | **USB Device Attached** |
+| **Cartelle aperte dall'utente** | **Shell Bags** |
+| **File rinominati / cifrati** | **Extension Mismatch Detected** · **Encryption Suspected** |
+| **Dati inseriti nei form web** | **Web Form Autofill** |
 | **Email** | Accounts → Email |
-| **Utenti + ultimo accesso** | **OS Accounts** |
-| **Navigare il filesystem** | Doppio click su **vol2** (la partizione più grande) |
+| **Navigare il filesystem** | Doppio click sulla partizione più grande (es. **vol2**/**vol3**) |
 | **Partizioni/spazio** | Click sul nome immagine → Partition Table |
 
 **Export:** right-click su **qualsiasi** file → Export
@@ -801,6 +837,8 @@ Identificare il File System di un'immagine: FTK Imager → File → Add Evidence
 | **Jump List (auto)** | `...\Windows\Recent\AutomaticDestinations` |
 | **Jump List (custom)** | `...\Windows\Recent\CustomDestinations` |
 | **Event Logs** | `C:\Windows\System32\winevt\Logs\` (`.evtx`) |
+| **PowerShell history** | `C:\Users\<user>\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt` |
+| **Zone.Identifier** (origine download) | ADS `<file>:Zone.Identifier` accanto al file scaricato (`ZoneId=3`, `HostUrl=`) |
 | **Recycle Bin** | `C:\$Recycle.Bin\<SID>\` |
 | **SYSTEM/SAM/SOFTWARE hive** | `C:\Windows\System32\config\` |
 | **NTUSER.DAT** | `C:\Users\<user>\NTUSER.DAT` |
